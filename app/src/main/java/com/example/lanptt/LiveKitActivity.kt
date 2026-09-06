@@ -134,11 +134,20 @@ class LiveKitActivity : AppCompatActivity() {
         setStatus("Getting token...")
         lifecycleScope.launch(Dispatchers.IO) {
             try {
-                val token = fetchToken(worker, roomName, name)
+                val (token, serverUrl) = fetchToken(worker, roomName, name)
+                // Prefer the worker's URL (source of truth) — fixes copy-paste
+                // mistakes like https:// instead of wss:// or trailing slashes,
+                // which otherwise fail with "could not fetch region settings".
+                val cleanEntered = normalizeLiveKitUrl(url)
+                val cleanServer = serverUrl?.let { normalizeLiveKitUrl(it) }
+                if (cleanServer != null && cleanServer != cleanEntered) {
+                    setStatus("Note: using server URL (you typed $cleanEntered)...")
+                }
+                val finalUrl = cleanServer ?: cleanEntered
                 val r = LiveKit.create(applicationContext)
                 room = r
                 launch { observeEvents(r) }
-                r.connect(url, token)
+                r.connect(finalUrl, token)
                 // Start muted: this is push-to-talk, not an open mic.
                 r.localParticipant?.setMicrophoneEnabled(false)
                 connected = true
@@ -197,7 +206,14 @@ class LiveKitActivity : AppCompatActivity() {
         }
     }
 
-    private fun fetchToken(worker: String, roomName: String, name: String): String {
+    private fun normalizeLiveKitUrl(raw: String): String {
+        var u = raw.trim().trimEnd('/')
+        if (u.startsWith("https://")) u = "wss://" + u.removePrefix("https://")
+        if (u.startsWith("http://")) u = "ws://" + u.removePrefix("http://")
+        return u
+    }
+
+    private fun fetchToken(worker: String, roomName: String, name: String): Pair<String, String?> {
         val conn = (URL("$worker/token").openConnection() as HttpURLConnection).apply {
             requestMethod = "POST"
             setRequestProperty("Content-Type", "application/json")
@@ -209,7 +225,9 @@ class LiveKitActivity : AppCompatActivity() {
         conn.outputStream.use { it.write(body.toByteArray()) }
         if (conn.responseCode != 200) throw Exception("token server HTTP ${conn.responseCode}")
         val resp = conn.inputStream.bufferedReader().readText()
-        return JSONObject(resp).getString("token")
+        val json = JSONObject(resp)
+        val url = if (json.has("url")) json.optString("url").takeIf { it.isNotEmpty() } else null
+        return JSONObject(resp).getString("token") to url
     }
 
     override fun onDestroy() {
