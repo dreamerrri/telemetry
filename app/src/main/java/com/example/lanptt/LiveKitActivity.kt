@@ -5,14 +5,40 @@ import android.content.pm.PackageManager
 import android.media.AudioManager
 import android.os.Bundle
 import android.view.MotionEvent
-import android.widget.Button
-import android.widget.EditText
-import android.widget.TextView
-import androidx.appcompat.app.AppCompatActivity
+import androidx.activity.ComponentActivity
+import androidx.activity.compose.setContent
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.Button
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Text
+import androidx.compose.material3.TopAppBar
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.ExperimentalComposeUiApi
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.input.pointer.pointerInteropFilter
+import androidx.compose.ui.tooling.preview.Preview
+import androidx.compose.ui.unit.dp
 import androidx.lifecycle.lifecycleScope
+import com.example.lanptt.ui.theme.LanPttTheme
 import io.livekit.android.LiveKit
-import io.livekit.android.room.Room
 import io.livekit.android.events.RoomEvent
+import io.livekit.android.room.Room
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -26,87 +52,72 @@ import java.net.URL
  * Join token is fetched from our Cloudflare Worker so the API secret
  * never ships in the app.
  */
-class LiveKitActivity : AppCompatActivity() {
+class LiveKitActivity : ComponentActivity() {
 
-    private lateinit var urlInput: EditText
-    private lateinit var workerInput: EditText
-    private lateinit var roomInput: EditText
-    private lateinit var nameInput: EditText
-    private lateinit var statusText: TextView
-    private lateinit var peersText: TextView
-    private lateinit var joinButton: Button
-    private lateinit var leaveButton: Button
-    private lateinit var pttButton: Button
+    private var prefsUrl by mutableStateOf("wss://REPLACE.livekit.cloud")
+    private var prefsWorker by mutableStateOf("https://REPLACE.workers.dev")
+    private var prefsRoom by mutableStateOf("office")
+    private var prefsName by mutableStateOf("")
+
+    private var status by mutableStateOf("enter details, hit Join.")
+    private var peers by mutableStateOf("In room: -")
+    private var connected by mutableStateOf(false)
+    private var talking by mutableStateOf(false)
 
     private var room: Room? = null
-    private var connected = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        setContentView(R.layout.activity_livekit)
 
-        urlInput = findViewById(R.id.lkUrlInput)
-        workerInput = findViewById(R.id.lkWorkerInput)
-        roomInput = findViewById(R.id.lkRoomInput)
-        nameInput = findViewById(R.id.lkNameInput)
-        statusText = findViewById(R.id.lkStatusText)
-        peersText = findViewById(R.id.lkPeersText)
-        joinButton = findViewById(R.id.lkJoinButton)
-        leaveButton = findViewById(R.id.lkLeaveButton)
-        pttButton = findViewById(R.id.lkPttButton)
-
-        // Restore last-used values (see token-server/README.md for setup).
         val prefs = getSharedPreferences("lk", MODE_PRIVATE)
-        urlInput.setText(prefs.getString("url", "wss://REPLACE.livekit.cloud"))
-        workerInput.setText(prefs.getString("worker", "https://REPLACE.workers.dev"))
-        roomInput.setText(prefs.getString("room", "office"))
-        nameInput.setText(prefs.getString("name", ""))
+        prefsUrl = prefs.getString("url", "wss://REPLACE.livekit.cloud") ?: prefsUrl
+        prefsWorker = prefs.getString("worker", "https://REPLACE.workers.dev") ?: prefsWorker
+        prefsRoom = prefs.getString("room", "office") ?: prefsRoom
+        prefsName = prefs.getString("name", "") ?: ""
 
         volumeControlStream = AudioManager.STREAM_MUSIC
-        updateUi()
 
         if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
             requestPermissions(arrayOf(Manifest.permission.RECORD_AUDIO), 1002)
         }
 
-        joinButton.setOnClickListener { join() }
-        leaveButton.setOnClickListener { leave() }
-
-        pttButton.setOnTouchListener { _, event ->
-            when (event.action) {
-                MotionEvent.ACTION_DOWN -> {
-                    setTalking(true)
-                    true
-                }
-                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
-                    setTalking(false)
-                    true
-                }
-                else -> false
+        setContent {
+            LanPttTheme {
+                CloudScreen(
+                    url = prefsUrl,
+                    worker = prefsWorker,
+                    roomName = prefsRoom,
+                    userName = prefsName,
+                    status = status,
+                    peers = peers,
+                    connected = connected,
+                    talking = talking,
+                    onUrlChange = { prefsUrl = it },
+                    onWorkerChange = { prefsWorker = it },
+                    onRoomChange = { prefsRoom = it },
+                    onNameChange = { prefsName = it },
+                    onJoin = { join() },
+                    onLeave = { leave() },
+                    onTalkStart = { setMicTalking(true) },
+                    onTalkStop = { setMicTalking(false) }
+                )
             }
         }
     }
 
-    private fun setStatus(msg: String) {
-        runOnUiThread { statusText.text = "Status: $msg" }
-    }
-
-    private fun updateUi() {
-        runOnUiThread {
-            joinButton.isEnabled = !connected
-            leaveButton.isEnabled = connected
-            pttButton.isEnabled = connected
-            pttButton.text = if (connected) "HOLD TO TALK" else "JOIN FIRST"
-            if (!connected) peersText.text = "In room: -"
+    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<String>, grantResults: IntArray) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode == 1002 && (grantResults.isEmpty() || grantResults[0] != PackageManager.PERMISSION_GRANTED)) {
+            status = "Mic permission denied - cannot talk."
         }
     }
 
-    private fun updatePeers() {
-        val r = room ?: return
+    private fun setPeerList() {
+        val r = room ?: run { peers = "In room: -"; return }
         val names = listOf("you") + r.remoteParticipants.values.map {
             it.name?.takeIf { n -> n.isNotEmpty() } ?: it.identity
         }
-        runOnUiThread { peersText.text = "In room (${names.size}): ${names.joinToString(", ")}" }
+        peers = "In room (${names.size}): ${names.joinToString(", ")}"
     }
 
     private fun join() {
@@ -115,23 +126,23 @@ class LiveKitActivity : AppCompatActivity() {
             requestPermissions(arrayOf(Manifest.permission.RECORD_AUDIO), 1002)
             return
         }
-        val url = urlInput.text.toString().trim()
-        val worker = workerInput.text.toString().trim().trimEnd('/')
-        val roomName = roomInput.text.toString().trim()
-        val name = nameInput.text.toString().trim()
+        val url = prefsUrl.trim()
+        val worker = prefsWorker.trim().trimEnd('/')
+        val roomName = prefsRoom.trim()
+        val name = prefsName.trim()
         if (url.contains("REPLACE") || worker.contains("REPLACE")) {
-            setStatus("Paste your LiveKit URL + worker URL first (see token-server/README).")
+            status = "Paste your LiveKit URL + worker URL first (see token-server/README)."
             return
         }
         if (roomName.isEmpty() || name.isEmpty()) {
-            setStatus("Room + name are required.")
+            status = "Room + name are required."
             return
         }
         getSharedPreferences("lk", MODE_PRIVATE).edit()
             .putString("url", url).putString("worker", worker)
             .putString("room", roomName).putString("name", name).apply()
 
-        setStatus("Getting token...")
+        status = "Getting token..."
         lifecycleScope.launch(Dispatchers.IO) {
             try {
                 val (token, serverUrl) = fetchToken(worker, roomName, name)
@@ -141,7 +152,7 @@ class LiveKitActivity : AppCompatActivity() {
                 val cleanEntered = normalizeLiveKitUrl(url)
                 val cleanServer = serverUrl?.let { normalizeLiveKitUrl(it) }
                 if (cleanServer != null && cleanServer != cleanEntered) {
-                    setStatus("Note: using server URL (you typed $cleanEntered)...")
+                    status = "Note: using server URL (you typed $cleanEntered)..."
                 }
                 val finalUrl = cleanServer ?: cleanEntered
                 val r = LiveKit.create(applicationContext)
@@ -151,11 +162,11 @@ class LiveKitActivity : AppCompatActivity() {
                 // Start muted: this is push-to-talk, not an open mic.
                 r.localParticipant?.setMicrophoneEnabled(false)
                 connected = true
-                withContext(Dispatchers.Main) { updateUi() }
-                setStatus("Joined '$roomName'. Hold to talk.")
-                updatePeers()
+                withContext(Dispatchers.Main) { if (!connected) peers = "In room: -" }
+                status = "Joined '$roomName'. Hold to talk."
+                setPeerList()
             } catch (e: Exception) {
-                setStatus("Join failed: ${e.message}")
+                status = "Join failed: ${e.message}"
             }
         }
     }
@@ -164,33 +175,34 @@ class LiveKitActivity : AppCompatActivity() {
         r.events.events.collect { event ->
             when (event) {
                 is RoomEvent.ParticipantConnected,
-                is RoomEvent.ParticipantDisconnected -> updatePeers()
+                is RoomEvent.ParticipantDisconnected -> setPeerList()
                 is RoomEvent.ActiveSpeakersChanged -> {
-                    val talking = event.speakers.map {
+                    val speakers = event.speakers.map {
                         it.name?.takeIf { n -> n.isNotEmpty() } ?: it.identity
                     }
-                    if (talking.isNotEmpty()) setStatus("Talking: ${talking.joinToString(", ")}")
+                    if (speakers.isNotEmpty()) status = "Talking: ${speakers.joinToString(", ")}"
                 }
                 is RoomEvent.Disconnected -> {
                     connected = false
+                    talking = false
                     room = null
-                    updateUi()
-                    setStatus("Disconnected.")
+                    peers = "In room: -"
+                    status = "Disconnected."
                 }
                 else -> {}
             }
         }
     }
 
-    private fun setTalking(talking: Boolean) {
+    private fun setMicTalking(wantTalking: Boolean) {
         val r = room
         if (!connected || r == null) return
         lifecycleScope.launch {
             try {
-                r.localParticipant?.setMicrophoneEnabled(talking)
-                runOnUiThread { pttButton.text = if (talking) "TALKING... (release)" else "HOLD TO TALK" }
+                r.localParticipant?.setMicrophoneEnabled(wantTalking)
+                talking = wantTalking
             } catch (e: Exception) {
-                setStatus("Mic error: ${e.message}")
+                status = "Mic error: ${e.message}"
             }
         }
     }
@@ -198,11 +210,12 @@ class LiveKitActivity : AppCompatActivity() {
     private fun leave() {
         if (!connected) return
         connected = false
+        talking = false
         lifecycleScope.launch {
             try { room?.disconnect() } catch (_: Exception) {}
             room = null
-            updateUi()
-            setStatus("Left. Join again anytime.")
+            peers = "In room: -"
+            status = "Left. Join again anytime."
         }
     }
 
@@ -235,5 +248,100 @@ class LiveKitActivity : AppCompatActivity() {
             try { room?.disconnect() } catch (_: Exception) {}
         }
         super.onDestroy()
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalComposeUiApi::class)
+@Composable
+fun CloudScreen(
+    url: String,
+    worker: String,
+    roomName: String,
+    userName: String,
+    status: String,
+    peers: String,
+    connected: Boolean,
+    talking: Boolean,
+    onUrlChange: (String) -> Unit,
+    onWorkerChange: (String) -> Unit,
+    onRoomChange: (String) -> Unit,
+    onNameChange: (String) -> Unit,
+    onJoin: () -> Unit,
+    onLeave: () -> Unit,
+    onTalkStart: () -> Unit,
+    onTalkStop: () -> Unit
+) {
+    Scaffold(
+        topBar = { TopAppBar(title = { Text("Cloud PTT") }) }
+    ) { inner ->
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(inner)
+                .padding(24.dp)
+                .verticalScroll(rememberScrollState())
+        ) {
+            Text("Cloud Walkie-Talkie (LiveKit)", style = MaterialTheme.typography.headlineSmall)
+            Spacer(Modifier.height(12.dp))
+            OutlinedTextField(value = url, onValueChange = onUrlChange, label = { Text("LiveKit URL") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+            Spacer(Modifier.height(8.dp))
+            OutlinedTextField(value = worker, onValueChange = onWorkerChange, label = { Text("Token server (worker)") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+            Spacer(Modifier.height(8.dp))
+            OutlinedTextField(value = roomName, onValueChange = onRoomChange, label = { Text("Room (channel)") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+            Spacer(Modifier.height(8.dp))
+            OutlinedTextField(value = userName, onValueChange = onNameChange, label = { Text("Your name") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+            Spacer(Modifier.height(12.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                Button(onClick = onJoin, enabled = !connected, modifier = Modifier.weight(1f)) { Text("JOIN") }
+                OutlinedButton(onClick = onLeave, enabled = connected, modifier = Modifier.weight(1f)) { Text("LEAVE") }
+            }
+            Spacer(Modifier.height(12.dp))
+            Text("Status: $status", style = MaterialTheme.typography.bodyMedium)
+            Spacer(Modifier.height(4.dp))
+            Text(peers, style = MaterialTheme.typography.bodyMedium)
+            Spacer(Modifier.height(16.dp))
+            Button(
+                onClick = {},
+                enabled = connected,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(120.dp)
+                    .pointerInteropFilter { event ->
+                        if (!connected) return@pointerInteropFilter false
+                        when (event.action) {
+                            MotionEvent.ACTION_DOWN -> {
+                                onTalkStart()
+                                true
+                            }
+                            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                                onTalkStop()
+                                true
+                            }
+                            else -> false
+                        }
+                    }
+            ) {
+                Text(if (!connected) "JOIN FIRST" else if (talking) "TALKING... (release)" else "HOLD TO TALK")
+            }
+        }
+    }
+}
+
+@Preview(showBackground = true)
+@Composable
+fun CloudScreenPreview() {
+    LanPttTheme {
+        CloudScreen(
+            url = "wss://demo.livekit.cloud",
+            worker = "https://demo.workers.dev",
+            roomName = "office",
+            userName = "andre",
+            status = "Joined 'office'. Hold to talk.",
+            peers = "In room (2): you, ben",
+            connected = true,
+            talking = false,
+            onUrlChange = {}, onWorkerChange = {}, onRoomChange = {}, onNameChange = {},
+            onJoin = {}, onLeave = {}, onTalkStart = {}, onTalkStop = {}
+        )
     }
 }
