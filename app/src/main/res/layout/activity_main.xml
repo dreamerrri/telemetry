@@ -51,4 +51,11 @@
         android:layout_marginTop="24dp"
         android:text="HOLD TO TALK" />
 
+    <Button
+        android:id="@+id/cloudModeButton"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="16dp"
+        android:text="CLOUD MODE (OFFICE + REMOTE)" />
+
 </LinearLayout>

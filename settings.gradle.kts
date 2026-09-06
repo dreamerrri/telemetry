@@ -10,6 +10,7 @@ dependencyResolutionManagement {
     repositories {
         google()
         mavenCentral()
+        maven("https://jitpack.io") // livekit-android -> com.github.davidliu:audioswitch
     }
 }
 rootProject.name = "LanPtt"

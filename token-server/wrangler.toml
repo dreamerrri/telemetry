@@ -1,0 +1,11 @@
+name = "lanptt-tokens"
+main = "worker.js"
+compatibility_date = "2025-01-01"
+
+[vars]
+# Public: your LiveKit Cloud WebSocket URL (paste from cloud.livekit.io project page)
+LIVEKIT_URL = "wss://telemetry-vc9e7ego.livekit.cloud"
+
+# Secrets below are NOT stored here. Set them via CLI (never commit):
+#   wrangler secret put LIVEKIT_API_KEY
+#   wrangler secret put LIVEKIT_API_SECRET
