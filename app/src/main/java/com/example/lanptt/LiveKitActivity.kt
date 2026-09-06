@@ -4,37 +4,22 @@ import android.Manifest
 import android.content.pm.PackageManager
 import android.media.AudioManager
 import android.os.Bundle
-import android.view.MotionEvent
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.Button
-import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Text
-import androidx.compose.material3.TopAppBar
-import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.ExperimentalComposeUiApi
-import androidx.compose.ui.Modifier
-import androidx.compose.ui.input.pointer.pointerInteropFilter
-import androidx.compose.ui.tooling.preview.Preview
-import androidx.compose.ui.unit.dp
 import androidx.lifecycle.lifecycleScope
+import com.example.lanptt.ui.talknet.ActiveScreen
+import com.example.lanptt.ui.talknet.ChatPeer
+import com.example.lanptt.ui.talknet.DefaultChannels
+import com.example.lanptt.ui.talknet.HomeScreen
+import com.example.lanptt.ui.talknet.JoinScreen
+import com.example.lanptt.ui.talknet.MePeer
+import com.example.lanptt.ui.talknet.TalkChannel
+import com.example.lanptt.ui.talknet.initialsFor
+import com.example.lanptt.ui.talknet.peerColorFor
 import com.example.lanptt.ui.theme.LanPttTheme
 import io.livekit.android.LiveKit
 import io.livekit.android.events.RoomEvent
@@ -47,22 +32,31 @@ import java.net.HttpURLConnection
 import java.net.URL
 
 /**
- * Cloud mode: join a LiveKit room (channel) and push-to-talk.
+ * Cloud mode (TalkNet UI): channel list -> join -> active PTT.
  * Mic starts MUTED; holding the button publishes, releasing mutes.
  * Join token is fetched from our Cloudflare Worker so the API secret
  * never ships in the app.
  */
 class LiveKitActivity : ComponentActivity() {
 
+    private enum class Screen { Home, Join, Active }
+
+    private var screen by mutableStateOf(Screen.Home)
     private var prefsUrl by mutableStateOf("wss://REPLACE.livekit.cloud")
     private var prefsWorker by mutableStateOf("https://REPLACE.workers.dev")
-    private var prefsRoom by mutableStateOf("office")
     private var prefsName by mutableStateOf("")
+    private var selectedChannel by mutableStateOf<String?>(null)
+    private var serverOpen by mutableStateOf(false)
+    private var joinError by mutableStateOf<String?>(null)
 
-    private var status by mutableStateOf("enter details, hit Join.")
-    private var peers by mutableStateOf("In room: -")
+    private var peers by mutableStateOf<List<ChatPeer>>(emptyList())
+    private var speakingIds by mutableStateOf<Set<String>>(emptySet())
     private var connected by mutableStateOf(false)
     private var talking by mutableStateOf(false)
+
+    /** Last-known rosters per channel, shown on Home cards. */
+    private val rosterCache = mutableStateMapOf<String, List<ChatPeer>>()
+    private var myIdentity: String = ""
 
     private var room: Room? = null
 
@@ -72,8 +66,8 @@ class LiveKitActivity : ComponentActivity() {
         val prefs = getSharedPreferences("lk", MODE_PRIVATE)
         prefsUrl = prefs.getString("url", "wss://REPLACE.livekit.cloud") ?: prefsUrl
         prefsWorker = prefs.getString("worker", "https://REPLACE.workers.dev") ?: prefsWorker
-        prefsRoom = prefs.getString("room", "office") ?: prefsRoom
         prefsName = prefs.getString("name", "") ?: ""
+        selectedChannel = prefs.getString("room", null)
 
         volumeControlStream = AudioManager.STREAM_MUSIC
 
@@ -82,42 +76,105 @@ class LiveKitActivity : ComponentActivity() {
         }
 
         setContent {
-            LanPttTheme {
-                CloudScreen(
-                    url = prefsUrl,
-                    worker = prefsWorker,
-                    roomName = prefsRoom,
-                    userName = prefsName,
-                    status = status,
-                    peers = peers,
-                    connected = connected,
-                    talking = talking,
-                    onUrlChange = { prefsUrl = it },
-                    onWorkerChange = { prefsWorker = it },
-                    onRoomChange = { prefsRoom = it },
-                    onNameChange = { prefsName = it },
-                    onJoin = { join() },
-                    onLeave = { leave() },
-                    onTalkStart = { setMicTalking(true) },
-                    onTalkStop = { setMicTalking(false) }
-                )
+            LanPttTheme(darkTheme = true) {
+                when (screen) {
+                    Screen.Home -> {
+                        val channels = DefaultChannels.map { def ->
+                            TalkChannel(
+                                id = def.id,
+                                name = def.name,
+                                knownPeers = rosterCache[def.id] ?: emptyList(),
+                                live = (rosterCache[def.id]?.size ?: 0) > 1
+                            )
+                        }
+                        HomeScreen(
+                            channels = channels,
+                            onJoin = { screen = Screen.Join },
+                            onTapChannel = { ch ->
+                                if (connected) leave()
+                                selectedChannel = ch.id
+                                joinError = null
+                                screen = Screen.Join
+                            }
+                        )
+                    }
+                    Screen.Join -> {
+                        JoinScreen(
+                            name = prefsName,
+                            onName = { prefsName = it },
+                            channels = DefaultChannels.map { def ->
+                                TalkChannel(
+                                    id = def.id,
+                                    name = def.name,
+                                    knownPeers = rosterCache[def.id] ?: emptyList(),
+                                    live = (rosterCache[def.id]?.size ?: 0) > 1
+                                )
+                            },
+                            selectedId = selectedChannel,
+                            onSelect = { selectedChannel = it },
+                            url = prefsUrl,
+                            onUrl = { prefsUrl = it },
+                            worker = prefsWorker,
+                            onWorker = { prefsWorker = it },
+                            serverOpen = serverOpen,
+                            onToggleServer = { serverOpen = !serverOpen },
+                            error = joinError,
+                            onJoin = { join() },
+                            onBack = { screen = Screen.Home }
+                        )
+                    }
+                    Screen.Active -> {
+                        val chId = selectedChannel
+                        val speaker = peers.firstOrNull { isSpeaking(it) }
+                        ActiveScreen(
+                            channelName = DefaultChannels.firstOrNull { it.id == chId }?.name
+                                ?: chId ?: "Channel",
+                            peers = peers,
+                            isSpeaking = ::isSpeaking,
+                            speaker = speaker,
+                            transmitting = talking,
+                            onBack = {
+                                leave()
+                                screen = Screen.Home
+                            },
+                            onDown = { setMicTalking(true) },
+                            onUp = { setMicTalking(false) }
+                        )
+                    }
+                }
             }
         }
     }
 
+    private fun isSpeaking(p: ChatPeer): Boolean =
+        if (p.id == "me") talking else speakingIds.contains(p.id)
+
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<String>, grantResults: IntArray) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
         if (requestCode == 1002 && (grantResults.isEmpty() || grantResults[0] != PackageManager.PERMISSION_GRANTED)) {
-            status = "Mic permission denied - cannot talk."
+            joinError = "Mic permission denied - cannot talk."
         }
     }
 
     private fun setPeerList() {
-        val r = room ?: run { peers = "In room: -"; return }
-        val names = listOf("you") + r.remoteParticipants.values.map {
-            it.name?.takeIf { n -> n.isNotEmpty() } ?: it.identity
+        val r = room
+        if (r == null) {
+            peers = emptyList()
+            return
         }
-        peers = "In room (${names.size}): ${names.joinToString(", ")}"
+        val list = mutableListOf(MePeer)
+        r.remoteParticipants.values.forEach { p ->
+            val idStr = p.identity?.value ?: return@forEach
+            val display = p.name?.takeIf { n -> n.isNotEmpty() } ?: idStr
+            list += ChatPeer(
+                id = idStr,
+                name = display,
+                initials = initialsFor(display),
+                color = peerColorFor(idStr)
+            )
+        }
+        peers = list
+        selectedChannel?.let { rosterCache[it] = list }
     }
 
     private fun join() {
@@ -128,33 +185,28 @@ class LiveKitActivity : ComponentActivity() {
         }
         val url = prefsUrl.trim()
         val worker = prefsWorker.trim().trimEnd('/')
-        val roomName = prefsRoom.trim()
+        val roomName = selectedChannel?.trim().orEmpty()
         val name = prefsName.trim()
         if (url.contains("REPLACE") || worker.contains("REPLACE")) {
-            status = "Paste your LiveKit URL + worker URL first (see token-server/README)."
+            joinError = "Paste your LiveKit URL + worker URL first (see token-server/README)."
             return
         }
         if (roomName.isEmpty() || name.isEmpty()) {
-            status = "Room + name are required."
+            joinError = "Name + channel are required."
             return
         }
         getSharedPreferences("lk", MODE_PRIVATE).edit()
             .putString("url", url).putString("worker", worker)
             .putString("room", roomName).putString("name", name).apply()
 
-        status = "Getting token..."
+        joinError = null
         lifecycleScope.launch(Dispatchers.IO) {
             try {
                 val (token, serverUrl) = fetchToken(worker, roomName, name)
-                // Prefer the worker's URL (source of truth) — fixes copy-paste
-                // mistakes like https:// instead of wss:// or trailing slashes,
-                // which otherwise fail with "could not fetch region settings".
                 val cleanEntered = normalizeLiveKitUrl(url)
                 val cleanServer = serverUrl?.let { normalizeLiveKitUrl(it) }
-                if (cleanServer != null && cleanServer != cleanEntered) {
-                    status = "Note: using server URL (you typed $cleanEntered)..."
-                }
                 val finalUrl = cleanServer ?: cleanEntered
+                myIdentity = name
                 val r = LiveKit.create(applicationContext)
                 room = r
                 launch { observeEvents(r) }
@@ -162,11 +214,10 @@ class LiveKitActivity : ComponentActivity() {
                 // Start muted: this is push-to-talk, not an open mic.
                 r.localParticipant?.setMicrophoneEnabled(false)
                 connected = true
-                withContext(Dispatchers.Main) { if (!connected) peers = "In room: -" }
-                status = "Joined '$roomName'. Hold to talk."
+                withContext(Dispatchers.Main) { screen = Screen.Active }
                 setPeerList()
             } catch (e: Exception) {
-                status = "Join failed: ${e.message}"
+                joinError = "Join failed: ${e.message}"
             }
         }
     }
@@ -177,17 +228,22 @@ class LiveKitActivity : ComponentActivity() {
                 is RoomEvent.ParticipantConnected,
                 is RoomEvent.ParticipantDisconnected -> setPeerList()
                 is RoomEvent.ActiveSpeakersChanged -> {
-                    val speakers = event.speakers.map {
-                        it.name?.takeIf { n -> n.isNotEmpty() } ?: it.identity
-                    }
-                    if (speakers.isNotEmpty()) status = "Talking: ${speakers.joinToString(", ")}"
+                    speakingIds = event.speakers
+                        .mapNotNull { sp ->
+                            val id = sp.identity?.value ?: return@mapNotNull null
+                            if (id == myIdentity) "me" else id
+                        }
+                        .filter { id -> id == "me" || peers.any { it.id == id } }
+                        .toSet()
                 }
                 is RoomEvent.Disconnected -> {
                     connected = false
                     talking = false
+                    speakingIds = emptySet()
                     room = null
-                    peers = "In room: -"
-                    status = "Disconnected."
+                    peers = emptyList()
+                    joinError = "Disconnected."
+                    screen = Screen.Home
                 }
                 else -> {}
             }
@@ -202,20 +258,20 @@ class LiveKitActivity : ComponentActivity() {
                 r.localParticipant?.setMicrophoneEnabled(wantTalking)
                 talking = wantTalking
             } catch (e: Exception) {
-                status = "Mic error: ${e.message}"
+                joinError = "Mic error: ${e.message}"
             }
         }
     }
 
     private fun leave() {
-        if (!connected) return
+        if (!connected && room == null) return
         connected = false
         talking = false
+        speakingIds = emptySet()
         lifecycleScope.launch {
             try { room?.disconnect() } catch (_: Exception) {}
             room = null
-            peers = "In room: -"
-            status = "Left. Join again anytime."
+            peers = emptyList()
         }
     }
 
@@ -248,100 +304,5 @@ class LiveKitActivity : ComponentActivity() {
             try { room?.disconnect() } catch (_: Exception) {}
         }
         super.onDestroy()
-    }
-}
-
-@OptIn(ExperimentalMaterial3Api::class, ExperimentalComposeUiApi::class)
-@Composable
-fun CloudScreen(
-    url: String,
-    worker: String,
-    roomName: String,
-    userName: String,
-    status: String,
-    peers: String,
-    connected: Boolean,
-    talking: Boolean,
-    onUrlChange: (String) -> Unit,
-    onWorkerChange: (String) -> Unit,
-    onRoomChange: (String) -> Unit,
-    onNameChange: (String) -> Unit,
-    onJoin: () -> Unit,
-    onLeave: () -> Unit,
-    onTalkStart: () -> Unit,
-    onTalkStop: () -> Unit
-) {
-    Scaffold(
-        topBar = { TopAppBar(title = { Text("Cloud PTT") }) }
-    ) { inner ->
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(inner)
-                .padding(24.dp)
-                .verticalScroll(rememberScrollState())
-        ) {
-            Text("Cloud Walkie-Talkie (LiveKit)", style = MaterialTheme.typography.headlineSmall)
-            Spacer(Modifier.height(12.dp))
-            OutlinedTextField(value = url, onValueChange = onUrlChange, label = { Text("LiveKit URL") }, singleLine = true, modifier = Modifier.fillMaxWidth())
-            Spacer(Modifier.height(8.dp))
-            OutlinedTextField(value = worker, onValueChange = onWorkerChange, label = { Text("Token server (worker)") }, singleLine = true, modifier = Modifier.fillMaxWidth())
-            Spacer(Modifier.height(8.dp))
-            OutlinedTextField(value = roomName, onValueChange = onRoomChange, label = { Text("Room (channel)") }, singleLine = true, modifier = Modifier.fillMaxWidth())
-            Spacer(Modifier.height(8.dp))
-            OutlinedTextField(value = userName, onValueChange = onNameChange, label = { Text("Your name") }, singleLine = true, modifier = Modifier.fillMaxWidth())
-            Spacer(Modifier.height(12.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
-                Button(onClick = onJoin, enabled = !connected, modifier = Modifier.weight(1f)) { Text("JOIN") }
-                OutlinedButton(onClick = onLeave, enabled = connected, modifier = Modifier.weight(1f)) { Text("LEAVE") }
-            }
-            Spacer(Modifier.height(12.dp))
-            Text("Status: $status", style = MaterialTheme.typography.bodyMedium)
-            Spacer(Modifier.height(4.dp))
-            Text(peers, style = MaterialTheme.typography.bodyMedium)
-            Spacer(Modifier.height(16.dp))
-            Button(
-                onClick = {},
-                enabled = connected,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(120.dp)
-                    .pointerInteropFilter { event ->
-                        if (!connected) return@pointerInteropFilter false
-                        when (event.action) {
-                            MotionEvent.ACTION_DOWN -> {
-                                onTalkStart()
-                                true
-                            }
-                            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
-                                onTalkStop()
-                                true
-                            }
-                            else -> false
-                        }
-                    }
-            ) {
-                Text(if (!connected) "JOIN FIRST" else if (talking) "TALKING... (release)" else "HOLD TO TALK")
-            }
-        }
-    }
-}
-
-@Preview(showBackground = true)
-@Composable
-fun CloudScreenPreview() {
-    LanPttTheme {
-        CloudScreen(
-            url = "wss://demo.livekit.cloud",
-            worker = "https://demo.workers.dev",
-            roomName = "office",
-            userName = "andre",
-            status = "Joined 'office'. Hold to talk.",
-            peers = "In room (2): you, ben",
-            connected = true,
-            talking = false,
-            onUrlChange = {}, onWorkerChange = {}, onRoomChange = {}, onNameChange = {},
-            onJoin = {}, onLeave = {}, onTalkStart = {}, onTalkStop = {}
-        )
     }
 }
