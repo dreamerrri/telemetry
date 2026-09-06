@@ -19,3 +19,8 @@
 
 # Kotlin incremental cache
 .kotlin/
+
+# Token server (Cloudflare Worker) secrets - never commit
+token-server/.dev.vars
+token-server/.env*
+token-server/node_modules/

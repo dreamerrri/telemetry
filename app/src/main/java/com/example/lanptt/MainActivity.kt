@@ -2,6 +2,7 @@ package com.example.lanptt
 
 import android.Manifest
 import android.app.Activity
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.media.AudioAttributes
 import android.media.AudioFormat
@@ -65,6 +66,10 @@ class MainActivity : Activity() {
                 }
                 else -> false
             }
+        }
+
+        findViewById<Button>(R.id.cloudModeButton).setOnClickListener {
+            startActivity(Intent(this, LiveKitActivity::class.java))
         }
 
         startReceiver()
