@@ -20,9 +20,8 @@
             android:name=".service.TelemetryService"
             android:exported="false"
             android:foregroundServiceType="microphone" />
-        <activity android:name=".LiveKitActivity" />
         <activity
-            android:name=".MainActivity"
+            android:name=".LiveKitActivity"
             android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
