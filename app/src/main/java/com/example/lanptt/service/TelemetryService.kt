@@ -13,7 +13,7 @@ import android.media.AudioTrack
 import android.media.MediaRecorder
 import android.os.BatteryManager
 import android.os.IBinder
-import com.example.lanptt.MainActivity
+import com.example.lanptt.LiveKitActivity
 import com.example.lanptt.R
 import com.example.lanptt.lan.LanDiscovery
 import com.example.lanptt.ui.talknet.ChatPeer
@@ -54,6 +54,7 @@ class TelemetryService : Service() {
         const val ACTION_STOP = "com.example.lanptt.STOP"
         const val ACTION_LAN_DOWN = "com.example.lanptt.LAN_DOWN"
         const val ACTION_LAN_UP = "com.example.lanptt.LAN_UP"
+        const val ACTION_LAN_ROOM = "com.example.lanptt.LAN_ROOM"
         const val ACTION_CLOUD_JOIN = "com.example.lanptt.CLOUD_JOIN"
         const val ACTION_CLOUD_LEAVE = "com.example.lanptt.CLOUD_LEAVE"
         const val ACTION_CLOUD_TALK = "com.example.lanptt.CLOUD_TALK"
@@ -96,23 +97,38 @@ class TelemetryService : Service() {
             ACTION_START -> {
                 intent.getStringExtra("name")?.takeIf { it.isNotBlank() }?.let { lanName = it }
                 startLanRx()
-                LanDiscovery.start(lanName) { batteryPct() }
+                LanDiscovery.start(lanName, { batteryPct() }, { SessionState.lanRoom.value })
                 refreshNotif()
             }
             ACTION_SET_NAME -> {
                 intent.getStringExtra("name")?.let {
                     lanName = it.ifBlank { "Android" }
                     LanDiscovery.stop()
-                    LanDiscovery.start(lanName) { batteryPct() }
+                    LanDiscovery.start(lanName, { batteryPct() }, { SessionState.lanRoom.value })
                 }
             }
+            ACTION_LAN_ROOM -> {
+                SessionState.lanRoom.value = intent.getStringExtra("room").orEmpty().trim().take(64)
+                SessionState.lanStatus.value = if (SessionState.lanRoom.value.isEmpty()) {
+                    "Ready. Enter peer IP, hold to talk."
+                } else {
+                    "Room '${SessionState.lanRoom.value}'. Hold to talk."
+                }
+                refreshNotif()
+            }
             ACTION_LAN_DOWN -> {
-                val peer = intent.getStringExtra("peer").orEmpty()
-                startLanTalk(peer)
+                startLanTalk(
+                    intent.getStringExtra("peer").orEmpty(),
+                    intent.getStringExtra("room").orEmpty()
+                )
             }
             ACTION_LAN_UP -> stopLanTalk()
             ACTION_LAN_TEXT -> {
-                sendLanText(intent.getStringExtra("peer").orEmpty(), intent.getStringExtra("text").orEmpty())
+                sendLanText(
+                    intent.getStringExtra("peer").orEmpty(),
+                    intent.getStringExtra("room").orEmpty(),
+                    intent.getStringExtra("text").orEmpty()
+                )
             }
             ACTION_CLOUD_TEXT -> {
                 sendCloudText(intent.getStringExtra("text").orEmpty())
@@ -196,7 +212,19 @@ class TelemetryService : Service() {
                         if (pkt.length > 0) {
                             // Sidecar text message?
                             val head = String(pkt.data, 0, minOf(pkt.length, 4), Charsets.UTF_8)
-                            if (head == "TXT|" && tryLanText(pkt)) continue
+                            if ((head == "TXT|") && tryLanText(pkt)) continue
+                            // Room-tagged voice? ("VOX|<room>|" + PCM)
+                            val tagged = parseRoomVoice(pkt)
+                            if (tagged != null) {
+                                val (room, offset) = tagged
+                                if (room == SessionState.lanRoom.value && room.isNotEmpty()) {
+                                    track.write(pkt.data, offset, pkt.length - offset)
+                                    SessionState.lanStatus.value =
+                                        "Room '$room' · ${pkt.address.hostAddress}..."
+                                }
+                                continue
+                            }
+                            // Legacy untagged: direct dial.
                             track.write(pkt.data, 0, pkt.length)
                             SessionState.lanStatus.value =
                                 "Receiving ${pkt.length}B from ${pkt.address.hostAddress}..."
@@ -213,18 +241,46 @@ class TelemetryService : Service() {
         }, "ptt-rx").start()
     }
 
-    private fun startLanTalk(peerIp: String) {
-        if (lanTx) return
-        val peer: InetAddress
-        try {
-            peer = InetAddress.getByName(peerIp.trim())
+    /** Parse "VOX|<room>|" header. Returns (room, audioOffset) or null if untagged. */
+    private fun parseRoomVoice(pkt: DatagramPacket): Pair<String, Int>? {
+        return try {
+            if (pkt.length < 6) return null
+            val head = String(pkt.data, 0, minOf(pkt.length, 80), Charsets.UTF_8)
+            if (!head.startsWith("VOX|")) return null
+            val end = head.indexOf('|', 4)
+            if (end < 0) return null
+            val room = head.substring(4, end).take(64)
+            if (room.isEmpty()) return null
+            room to (end + 1)
         } catch (_: Exception) {
+            null
+        }
+    }
+
+    private fun startLanTalk(peerIp: String, room: String) {
+        if (lanTx) return
+        val roomMode = room.trim().take(64).isNotEmpty()
+        val peer: InetAddress? = if (roomMode) {
+            null
+        } else {
+            try {
+                InetAddress.getByName(peerIp.trim())
+            } catch (_: Exception) {
+                SessionState.lanStatus.value = "Bad peer IP."
+                return
+            }
+        }
+        if (!roomMode && peer == null) {
             SessionState.lanStatus.value = "Bad peer IP."
             return
         }
         lanTx = true
         SessionState.lanTransmitting.value = true
-        SessionState.lanStatus.value = "Talking -> ${peerIp.trim()}..."
+        SessionState.lanStatus.value = if (roomMode) {
+            "Talking -> room '${room.trim()}'..."
+        } else {
+            "Talking -> ${peerIp.trim()}..."
+        }
         refreshNotif()
 
         Thread({
@@ -246,10 +302,21 @@ class TelemetryService : Service() {
                 sock = DatagramSocket().apply { broadcast = true }
                 rec.startRecording()
                 val buf = ByteArray(1024)
+                val tag = if (roomMode) "VOX|${room.trim()}|".toByteArray() else null
+                val dests = if (roomMode) LanDiscovery.broadcastAddrs() else emptyList()
                 while (lanTx) {
                     val n = rec.read(buf, 0, buf.size)
                     if (n > 0) {
-                        sock.send(DatagramPacket(buf, n, peer, LAN_PORT))
+                        if (roomMode && tag != null) {
+                            val out = tag + buf.copyOf(n)
+                            for (d in dests) {
+                                try {
+                                    sock.send(DatagramPacket(out, out.size, d, LAN_PORT))
+                                } catch (_: Exception) { }
+                            }
+                        } else if (peer != null) {
+                            sock.send(DatagramPacket(buf, n, peer, LAN_PORT))
+                        }
                     }
                 }
             } catch (e: Exception) {
@@ -274,31 +341,49 @@ class TelemetryService : Service() {
     private fun tryLanText(pkt: DatagramPacket): Boolean {
         return try {
             val msg = String(pkt.data, 0, pkt.length, Charsets.UTF_8)
-            val parts = msg.split("|", limit = 3)
-            if (parts.size < 3 || parts[0] != "TXT") return false
-            val sender = parts[1].ifBlank { pkt.address.hostAddress ?: "?" }
-            val text = parts[2].trim().take(280)
-            if (text.isEmpty()) return true
-            SessionState.lanTexts.value = (SessionState.lanTexts.value + TextMsg(sender, text)).takeLast(5)
+            if (!msg.startsWith("TXT|")) return false
+            val parts = msg.split("|", limit = 4)
+            // New: TXT|<room>|<name>|<text>. Legacy: TXT|<name>|<text>.
+            val (room, sender, text) = when {
+                parts.size >= 4 -> Triple(parts[1], parts[2], parts[3])
+                parts.size == 3 -> Triple("", parts[1], parts[2])
+                else -> return false
+            }
+            val from = sender.ifBlank { pkt.address.hostAddress ?: "?" }
+            val clean = text.trim().take(280)
+            if (clean.isEmpty()) return true
+            SessionState.lanTexts.value =
+                (SessionState.lanTexts.value + TextMsg(from, clean, room = room)).takeLast(5)
             true
         } catch (_: Exception) {
             false
         }
     }
 
-    private fun sendLanText(peerIp: String, text: String) {
+    private fun sendLanText(peerIp: String, room: String, text: String) {
         val clean = text.trim().take(280)
-        if (peerIp.isBlank() || clean.isEmpty()) return
+        if (clean.isEmpty()) return
+        val roomMode = room.trim().take(64).isNotEmpty()
+        if (!roomMode && peerIp.isBlank()) return
         Thread({
             try {
-                val peer = InetAddress.getByName(peerIp.trim())
-                val payload = "TXT|${lanName.replace("|", "/")}|$clean".toByteArray()
+                val payload =
+                    "TXT|${room.trim().take(64)}|${lanName.replace("|", "/")}|$clean".toByteArray()
                 DatagramSocket().use { sock ->
                     sock.broadcast = true
-                    sock.send(DatagramPacket(payload, payload.size, peer, LAN_PORT))
+                    if (roomMode) {
+                        for (d in LanDiscovery.broadcastAddrs()) {
+                            try {
+                                sock.send(DatagramPacket(payload, payload.size, d, LAN_PORT))
+                            } catch (_: Exception) { }
+                        }
+                    } else {
+                        val peer = InetAddress.getByName(peerIp.trim())
+                        sock.send(DatagramPacket(payload, payload.size, peer, LAN_PORT))
+                    }
                 }
                 SessionState.lanTexts.value =
-                    (SessionState.lanTexts.value + TextMsg("You", clean)).takeLast(5)
+                    (SessionState.lanTexts.value + TextMsg("You", clean, room = room.trim())).takeLast(5)
             } catch (e: Exception) {
                 SessionState.lanStatus.value = "Text failed: ${e.message}"
             }
@@ -479,7 +564,7 @@ class TelemetryService : Service() {
     private fun buildNotif(): Notification {
         val open = PendingIntent.getActivity(
             this, 0,
-            Intent(this, MainActivity::class.java),
+            Intent(this, LiveKitActivity::class.java),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
         val stop = PendingIntent.getService(

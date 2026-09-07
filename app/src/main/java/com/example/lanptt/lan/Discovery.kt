@@ -7,7 +7,7 @@ import java.net.DatagramSocket
 import java.net.InetAddress
 import java.net.Inet4Address
 
-data class LanPeer(val name: String, val ip: String, val lastSeen: Long, val battery: Int = -1)
+data class LanPeer(val name: String, val ip: String, val lastSeen: Long, val battery: Int = -1, val room: String = "")
 
 /**
  * LAN presence: UDP broadcast beacons (name + IP) + listener.
@@ -29,12 +29,12 @@ object LanDiscovery {
     private var listenSock: DatagramSocket? = null
 
     @Synchronized
-    fun start(displayName: String, battery: () -> Int = { -1 }) {
+    fun start(displayName: String, battery: () -> Int = { -1 }, room: () -> String = { "" }) {
         refs++
         if (running) return
         running = true
         val name = displayName.trim().take(32).ifEmpty { android.os.Build.MODEL ?: "Android" }
-        Thread({ beaconLoop(name, battery) }, "lan-beacon").apply { isDaemon = true; start() }
+        Thread({ beaconLoop(name, battery, room) }, "lan-beacon").apply { isDaemon = true; start() }
         Thread({ listenLoop() }, "lan-listen").apply { isDaemon = true; start() }
     }
 
@@ -92,7 +92,7 @@ object LanDiscovery {
     }
 
     /** Broadcast address per eligible interface (for multi-homed phones). */
-    private fun broadcastAddrs(): List<InetAddress> {
+    fun broadcastAddrs(): List<InetAddress> {
         val out = mutableListOf<InetAddress>()
         try {
             val ifs = java.net.NetworkInterface.getNetworkInterfaces()
@@ -113,7 +113,7 @@ object LanDiscovery {
         return out
     }
 
-    private fun beaconLoop(name: String, battery: () -> Int) {
+    private fun beaconLoop(name: String, battery: () -> Int, room: () -> String) {
         try {
             val sock = DatagramSocket().apply { broadcast = true }
             beaconSock = sock
@@ -121,7 +121,8 @@ object LanDiscovery {
             while (running) {
                 try {
                     val clean = name.replace("|", "/")
-                    val payload = "$PREFIX$clean|${battery()}".toByteArray()
+                    val rm = room().trim().take(64).replace("|", "/")
+                    val payload = "$PREFIX$clean|${battery()}|$rm".toByteArray()
                     for (dest in broadcastAddrs()) {
                         try {
                             sock.send(DatagramPacket(payload, payload.size, dest, PORT))
@@ -163,12 +164,13 @@ object LanDiscovery {
                 if (ip == detectOwnIp()) continue
                 val msg = String(pkt.data, 0, pkt.length, Charsets.UTF_8)
                 if (!msg.startsWith(PREFIX)) continue
-                val parts = msg.removePrefix(PREFIX).split("|", limit = 3)
+                val parts = msg.removePrefix(PREFIX).split("|", limit = 4)
                 val peerName = parts.getOrNull(0)?.trim()?.take(48)?.ifEmpty { continue } ?: continue
                 val batt = parts.getOrNull(1)?.toIntOrNull() ?: -1
+                val peerRoom = parts.getOrNull(2)?.trim()?.take(64).orEmpty()
                 val now = System.currentTimeMillis()
                 val cur = _peers.value.toMutableMap()
-                cur[ip] = LanPeer(peerName, ip, now, batt)
+                cur[ip] = LanPeer(peerName, ip, now, batt, peerRoom)
                 _peers.value = cur
             } catch (_: Exception) {
                 if (!running) break

@@ -3,8 +3,8 @@ package com.example.lanptt.service
 import com.example.lanptt.ui.talknet.ChatPeer
 import kotlinx.coroutines.flow.MutableStateFlow
 
-/** One received quick text. */
-data class TextMsg(val sender: String, val text: String, val at: Long = System.currentTimeMillis())
+/** One received quick text. room = "" means LAN direct (no room). */
+data class TextMsg(val sender: String, val text: String, val at: Long = System.currentTimeMillis(), val room: String = "")
 
 /**
  * Shared session state. The [TelemetryService] owns all audio/network and
@@ -15,6 +15,8 @@ object SessionState {
     val lanStatus = MutableStateFlow("starting...")
     val lanTransmitting = MutableStateFlow(false)
     val lanTexts = MutableStateFlow<List<TextMsg>>(emptyList())
+    /** My current LAN room ("": none — direct dial only). */
+    val lanRoom = MutableStateFlow("")
 
     // Cloud
     val cloudConnected = MutableStateFlow(false)

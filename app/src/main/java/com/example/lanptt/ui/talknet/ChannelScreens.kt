@@ -31,7 +31,12 @@ import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.CornerRadius
@@ -39,10 +44,14 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.input.pointer.pointerInteropFilter
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.lanptt.lan.LanPeer
+import com.example.lanptt.service.TextMsg
 import com.example.lanptt.ui.theme.LanPttTheme
 import com.example.lanptt.ui.theme.TalkBg
 import com.example.lanptt.ui.theme.TalkBorder
@@ -52,6 +61,90 @@ import com.example.lanptt.ui.theme.TalkMint
 import com.example.lanptt.ui.theme.TalkMuted
 import com.example.lanptt.ui.theme.TalkText
 import com.example.lanptt.ui.theme.TalkTextDim
+
+/* ─── Nav + transport ──────────────────────────────────── */
+
+enum class MainTab { Direct, Rooms }
+enum class Transport { LAN, CLOUD }
+
+@Composable
+fun TransportToggle(
+    transport: Transport,
+    onTransport: (Transport) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Row(
+        modifier = modifier
+            .clip(RoundedCornerShape(10.dp))
+            .background(TalkCard)
+            .border(1.dp, TalkBorder, RoundedCornerShape(10.dp))
+            .padding(3.dp),
+        horizontalArrangement = Arrangement.spacedBy(3.dp)
+    ) {
+        Transport.entries.forEach { t ->
+            val sel = transport == t
+            Box(
+                contentAlignment = Alignment.Center,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(7.dp))
+                    .background(if (sel) TalkMint else TalkCard)
+                    .clickable { onTransport(t) }
+                    .padding(horizontal = 12.dp, vertical = 6.dp)
+            ) {
+                Text(
+                    t.name,
+                    color = if (sel) TalkBg else TalkTextDim,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Bold,
+                    letterSpacing = 1.sp
+                )
+            }
+        }
+    }
+}
+
+@Composable
+fun BottomNav(
+    tab: MainTab,
+    onTab: (MainTab) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Column(modifier = modifier.fillMaxWidth()) {
+        Box(
+            Modifier
+                .fillMaxWidth()
+                .height(1.dp)
+                .background(TalkBorder)
+        )
+        Row(modifier = Modifier.fillMaxWidth()) {
+            MainTab.entries.forEach { t ->
+                val sel = tab == t
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    modifier = Modifier
+                        .weight(1f)
+                        .clickable { onTab(t) }
+                        .padding(vertical = 12.dp)
+                ) {
+                    Text(
+                        t.name.uppercase(),
+                        color = if (sel) TalkMint else TalkMuted,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Bold,
+                        letterSpacing = 1.5.sp
+                    )
+                    Spacer(Modifier.height(4.dp))
+                    Box(
+                        Modifier
+                            .width(24.dp)
+                            .height(2.dp)
+                            .background(if (sel) TalkMint else Color.Transparent, CircleShape)
+                    )
+                }
+            }
+        }
+    }
+}
 
 /* ─── Channel model ────────────────────────────────────── */
 
@@ -91,282 +184,7 @@ fun RadioIcon(active: Boolean, modifier: Modifier = Modifier) {
     }
 }
 
-/* ─── HOME ─────────────────────────────────────────────── */
-
-enum class HomeMode { LAN, CLOUD }
-
-@Composable
-fun HomeScreen(
-    channels: List<TalkChannel>,
-    recents: List<TalkChannel>,
-    freeWord: String,
-    onFreeWord: (String) -> Unit,
-    onJoinWord: () -> Unit,
-    mode: HomeMode,
-    onMode: (HomeMode) -> Unit,
-    ownIp: String,
-    peerIp: String,
-    onPeerIp: (String) -> Unit,
-    onOpenLanTalk: () -> Unit,
-    lanName: String,
-    onLanName: (String) -> Unit,
-    nearby: List<com.example.lanptt.lan.LanPeer>,
-    onPickPeer: (String) -> Unit,
-    onJoin: () -> Unit,
-    onTapChannel: (TalkChannel) -> Unit,
-    modifier: Modifier = Modifier
-) {
-    Column(
-        modifier = modifier
-            .fillMaxSize()
-            .background(TalkBg)
-            .statusBarsPadding()
-    ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(start = 20.dp, end = 20.dp, top = 24.dp, bottom = 16.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-                Column {
-                    MonoLabel("TELEMETRY", color = TalkMint, fontSize = 12)
-                    Text("Channels", color = TalkText, fontSize = 20.sp, fontWeight = FontWeight.Bold)
-                }
-            Button(
-                onClick = onJoin,
-                shape = CircleShape,
-                colors = ButtonDefaults.buttonColors(containerColor = TalkMint, contentColor = TalkBg)
-            ) {
-                Text("+ Join", fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
-            }
-        }
-        // LAN / CLOUD toggle.
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 20.dp)
-                .clip(RoundedCornerShape(12.dp))
-                .background(TalkCard)
-                .border(1.dp, TalkBorder, RoundedCornerShape(12.dp))
-                .padding(4.dp),
-            horizontalArrangement = Arrangement.spacedBy(4.dp)
-        ) {
-            HomeMode.entries.forEach { m ->
-                val sel = mode == m
-                Box(
-                    contentAlignment = Alignment.Center,
-                    modifier = Modifier
-                        .weight(1f)
-                        .clip(RoundedCornerShape(8.dp))
-                        .background(if (sel) TalkMint else TalkCard)
-                        .clickable { onMode(m) }
-                        .padding(vertical = 8.dp)
-                ) {
-                    Text(
-                        m.name,
-                        color = if (sel) TalkBg else TalkTextDim,
-                        fontSize = 13.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        letterSpacing = 1.sp
-                    )
-                }
-            }
-        }
-        Spacer(Modifier.height(12.dp))
-        Box(
-            Modifier
-                .fillMaxWidth()
-                .height(1.dp)
-                .background(TalkBorder)
-        )
-        if (mode == HomeMode.CLOUD) {
-            LazyColumn(
-                modifier = Modifier
-                    .weight(1f)
-                    .padding(horizontal = 16.dp, vertical = 12.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                items(channels, key = { "pin-${it.id}" }) { ch ->
-                    ChannelCard(ch = ch, onTap = { onTapChannel(ch) })
-                }
-                if (recents.isNotEmpty()) {
-                    item(key = "recent-label") {
-                        MonoLabel("RECENT", modifier = Modifier.padding(top = 8.dp))
-                    }
-                    items(recents, key = { "recent-${it.id}" }) { ch ->
-                        ChannelCard(ch = ch, onTap = { onTapChannel(ch) })
-                    }
-                }
-                item(key = "free-word") {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(16.dp))
-                            .background(TalkCard)
-                            .border(1.dp, TalkBorder, RoundedCornerShape(16.dp))
-                            .padding(16.dp)
-                    ) {
-                        MonoLabel("JOIN BY WORD")
-                        Spacer(Modifier.height(8.dp))
-                        OutlinedTextField(
-                            value = freeWord,
-                            onValueChange = onFreeWord,
-                            placeholder = { Text("e.g. night-shift", color = TalkMuted) },
-                            singleLine = true,
-                            modifier = Modifier.fillMaxWidth()
-                        )
-                        Spacer(Modifier.height(8.dp))
-                        MonoLabel("Any word is a channel. Same word = same room.")
-                        Spacer(Modifier.height(8.dp))
-                        Button(
-                            onClick = onJoinWord,
-                            enabled = freeWord.isNotBlank(),
-                            modifier = Modifier.fillMaxWidth(),
-                            shape = RoundedCornerShape(12.dp),
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = TalkMint,
-                                contentColor = TalkBg,
-                                disabledContainerColor = TalkCard2,
-                                disabledContentColor = TalkMuted
-                            )
-                        ) {
-                            Text("JOIN", fontWeight = FontWeight.Bold)
-                        }
-                    }
-                }
-            }
-        } else {
-            // LAN tab: direct-dial card (peer discovery lands here next).
-            Column(
-                modifier = Modifier
-                    .weight(1f)
-                    .padding(horizontal = 16.dp, vertical = 12.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(16.dp))
-                        .background(TalkCard)
-                        .border(1.dp, TalkBorder, RoundedCornerShape(16.dp))
-                        .padding(16.dp)
-                ) {
-                    MonoLabel("LAN DIRECT")
-                    Spacer(Modifier.height(4.dp))
-                    MonoLabel("My IP: $ownIp", color = TalkTextDim)
-                    Spacer(Modifier.height(12.dp))
-                    MonoLabel("YOUR NAME")
-                    Spacer(Modifier.height(8.dp))
-                    OutlinedTextField(
-                        value = lanName,
-                        onValueChange = onLanName,
-                        placeholder = { Text("e.g. Alex", color = TalkMuted) },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                    Spacer(Modifier.height(12.dp))
-                    MonoLabel("NEARBY (${nearby.size})")
-                    Spacer(Modifier.height(8.dp))
-                    if (nearby.isEmpty()) {
-                        MonoLabel("No peers yet — same WiFi, app open.", color = TalkMuted)
-                    } else {
-                        val dupes = nearby.groupBy { it.name }.filterValues { it.size > 1 }.keys
-                        nearby.forEach { peer ->
-                            val label = if (peer.name in dupes) {
-                                val oct = peer.ip.substringAfterLast('.', peer.ip)
-                                "${peer.name} • $oct"
-                            } else peer.name
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clip(RoundedCornerShape(12.dp))
-                                    .background(
-                                        if (peerIp == peer.ip) TalkMint.copy(alpha = 0.12f)
-                                        else TalkCard2
-                                    )
-                                    .border(
-                                        1.dp,
-                                        if (peerIp == peer.ip) TalkMint else TalkBorder,
-                                        RoundedCornerShape(12.dp)
-                                    )
-                                    .clickable { onPickPeer(peer.ip) }
-                                    .padding(12.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Avatar(
-                                    peer = ChatPeer(
-                                        peer.ip, peer.name,
-                                        peer.name.split(" ").let {
-                                            if (it.size == 1) it[0].take(2).uppercase()
-                                            else (it[0].take(1) + it[1].take(1)).uppercase()
-                                        },
-                                        peerColorForName(peer.name)
-                                    ),
-                                    size = 36.dp
-                                )
-                                Spacer(Modifier.width(12.dp))
-                                Column(modifier = Modifier.weight(1f)) {
-                                    Text(label, color = TalkText, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
-                                    MonoLabel(peer.ip, color = TalkTextDim)
-                                }
-                                if (peerIp == peer.ip) PulsingDot()
-                            }
-                            Spacer(Modifier.height(8.dp))
-                        }
-                    }
-                    Spacer(Modifier.height(4.dp))
-                    MonoLabel("PEER IP (MANUAL FALLBACK)")
-                    Spacer(Modifier.height(8.dp))
-                    OutlinedTextField(
-                        value = peerIp,
-                        onValueChange = onPeerIp,
-                        placeholder = { Text("e.g. 192.168.1.42", color = TalkMuted) },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                    Spacer(Modifier.height(12.dp))
-                    Button(
-                        onClick = onOpenLanTalk,
-                        enabled = peerIp.isNotBlank(),
-                        modifier = Modifier.fillMaxWidth(),
-                        shape = RoundedCornerShape(16.dp),
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = TalkMint,
-                            contentColor = TalkBg,
-                            disabledContainerColor = TalkCard2,
-                            disabledContentColor = TalkMuted
-                        )
-                    ) {
-                        Text(
-                            "OPEN LAN TALK",
-                            fontWeight = FontWeight.Bold,
-                            modifier = Modifier.padding(vertical = 8.dp)
-                        )
-                    }
-                    Spacer(Modifier.height(8.dp))
-                    MonoLabel("Tap a peer or type an IP below.")
-                }
-            }
-        }
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 20.dp, vertical = 16.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            MonoLabel(if (mode == HomeMode.CLOUD) "Cloud · Connected" else "LAN · Direct", color = TalkMuted)
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Box(Modifier.size(6.dp).background(TalkMint, CircleShape))
-                Spacer(Modifier.width(6.dp))
-                Text("Online", color = TalkMint, fontSize = 12.sp, fontWeight = FontWeight.Medium)
-            }
-        }
-    }
-}
-
-/* ─── Channel card (shared Home row) ───────────────────── */
+/* ─── Channel card (shared room row) ───────────────────── */
 
 @Composable
 fun ChannelCard(
@@ -424,7 +242,290 @@ fun ChannelCard(
     }
 }
 
-/* ─── JOIN ─────────────────────────────────────────────── */
+/* ─── Shared room list (pinned + recents + word) ───────── */
+
+@Composable
+fun RoomListContent(
+    channels: List<TalkChannel>,
+    recents: List<TalkChannel>,
+    freeWord: String,
+    onFreeWord: (String) -> Unit,
+    onJoinWord: () -> Unit,
+    onTapChannel: (TalkChannel) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    LazyColumn(
+        modifier = modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        items(channels, key = { "pin-${it.id}" }) { ch ->
+            ChannelCard(ch = ch, onTap = { onTapChannel(ch) })
+        }
+        if (recents.isNotEmpty()) {
+            item(key = "recent-label") {
+                MonoLabel("RECENT", modifier = Modifier.padding(top = 8.dp))
+            }
+            items(recents, key = { "recent-${it.id}" }) { ch ->
+                ChannelCard(ch = ch, onTap = { onTapChannel(ch) })
+            }
+        }
+        item(key = "free-word") {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(16.dp))
+                    .background(TalkCard)
+                    .border(1.dp, TalkBorder, RoundedCornerShape(16.dp))
+                    .padding(16.dp)
+            ) {
+                MonoLabel("JOIN BY WORD")
+                Spacer(Modifier.height(8.dp))
+                OutlinedTextField(
+                    value = freeWord,
+                    onValueChange = onFreeWord,
+                    placeholder = { Text("e.g. night-shift", color = TalkMuted) },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Spacer(Modifier.height(8.dp))
+                MonoLabel("Any word is a channel. Same word = same room.")
+                Spacer(Modifier.height(8.dp))
+                Button(
+                    onClick = onJoinWord,
+                    enabled = freeWord.isNotBlank(),
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(12.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = TalkMint,
+                        contentColor = TalkBg,
+                        disabledContainerColor = TalkCard2,
+                        disabledContentColor = TalkMuted
+                    )
+                ) {
+                    Text("JOIN", fontWeight = FontWeight.Bold)
+                }
+            }
+        }
+    }
+}
+
+/* ─── HOME (cloud rooms content) ───────────────────────── */
+
+@Composable
+fun HomeScreen(
+    channels: List<TalkChannel>,
+    recents: List<TalkChannel>,
+    freeWord: String,
+    onFreeWord: (String) -> Unit,
+    onJoinWord: () -> Unit,
+    onTapChannel: (TalkChannel) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    RoomListContent(
+        channels = channels,
+        recents = recents,
+        freeWord = freeWord,
+        onFreeWord = onFreeWord,
+        onJoinWord = onJoinWord,
+        onTapChannel = onTapChannel,
+        modifier = modifier.fillMaxSize()
+    )
+}
+
+/* ─── DIRECT page (LAN 1-to-1) ─────────────────────────── */
+
+@OptIn(ExperimentalComposeUiApi::class)
+@Composable
+fun DirectPage(
+    ownIp: String,
+    lanName: String,
+    onLanName: (String) -> Unit,
+    peerIp: String,
+    onPeerIp: (String) -> Unit,
+    nearby: List<LanPeer>,
+    transmitting: Boolean,
+    status: String,
+    presets: List<String>,
+    onSendText: (String) -> Unit,
+    texts: List<TextMsg>,
+    onDown: (String) -> Unit,
+    onUp: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    var liveMode by rememberSaveable { mutableStateOf(false) }
+    Column(
+        modifier = modifier
+            .fillMaxSize()
+            .padding(horizontal = 20.dp)
+    ) {
+        Column(
+            modifier = Modifier
+                .weight(1f)
+                .fillMaxWidth()
+                .verticalScroll(rememberScrollState())
+        ) {
+            Spacer(Modifier.height(20.dp))
+            MonoLabel("YOUR NAME")
+            Spacer(Modifier.height(8.dp))
+            OutlinedTextField(
+                value = lanName,
+                onValueChange = onLanName,
+                placeholder = { Text("e.g. Alex", color = TalkMuted) },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth()
+            )
+            Spacer(Modifier.height(12.dp))
+            MonoLabel("MY IP: $ownIp", color = TalkTextDim)
+            Spacer(Modifier.height(12.dp))
+            MonoLabel("NEARBY (${nearby.size})")
+            Spacer(Modifier.height(8.dp))
+            if (nearby.isEmpty()) {
+                MonoLabel("No peers yet — same WiFi, app open.", color = TalkMuted)
+            } else {
+                val dupes = nearby.groupBy { it.name }.filterValues { it.size > 1 }.keys
+                nearby.forEach { peer ->
+                    val label = if (peer.name in dupes) {
+                        "${peer.name} • ${peer.ip.substringAfterLast('.', peer.ip)}"
+                    } else peer.name
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(
+                                if (peerIp == peer.ip) TalkMint.copy(alpha = 0.12f) else TalkCard
+                            )
+                            .border(
+                                1.dp,
+                                if (peerIp == peer.ip) TalkMint else TalkBorder,
+                                RoundedCornerShape(12.dp)
+                            )
+                            .clickable { onPeerIp(peer.ip) }
+                            .padding(12.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Avatar(
+                            peer = ChatPeer(
+                                peer.ip, peer.name,
+                                peer.name.split(" ").let {
+                                    if (it.size == 1) it[0].take(2).uppercase()
+                                    else (it[0].take(1) + it[1].take(1)).uppercase()
+                                },
+                                peerColorForName(peer.name)
+                            ),
+                            size = 36.dp
+                        )
+                        Spacer(Modifier.width(12.dp))
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(label, color = TalkText, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+                            val ageS = ((System.currentTimeMillis() - peer.lastSeen) / 1000).toInt()
+                            val sub = buildString {
+                                append(peer.ip)
+                                if (peer.battery >= 0) append(" · ${peer.battery}%")
+                                if (ageS > 3) append(" · ${ageS}s")
+                            }
+                            MonoLabel(
+                                sub,
+                                color = if (peer.battery in 0..19) Color(0xFFF87171) else TalkTextDim
+                            )
+                        }
+                        if (peerIp == peer.ip) PulsingDot()
+                    }
+                    Spacer(Modifier.height(8.dp))
+                }
+            }
+            Spacer(Modifier.height(12.dp))
+            MonoLabel("PEER IP (MANUAL)")
+            Spacer(Modifier.height(8.dp))
+            OutlinedTextField(
+                value = peerIp,
+                onValueChange = onPeerIp,
+                placeholder = { Text("e.g. 192.168.1.42", color = TalkMuted) },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth()
+            )
+            Spacer(Modifier.height(8.dp))
+            MonoLabel("Status: $status", color = TalkTextDim)
+            if (texts.isNotEmpty()) {
+                Spacer(Modifier.height(8.dp))
+                IncomingTexts(msgs = texts.filter { it.room.isEmpty() }, modifier = Modifier.fillMaxWidth())
+            }
+            if (presets.isNotEmpty()) {
+                Spacer(Modifier.height(12.dp))
+                QuickTextRow(presets = presets, onSend = onSendText, modifier = Modifier.fillMaxWidth())
+            }
+            Spacer(Modifier.height(12.dp))
+        }
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            modifier = Modifier.align(Alignment.CenterHorizontally)
+        ) {
+            MonoLabel("LIVE MONITOR")
+            Switch(
+                checked = liveMode,
+                onCheckedChange = {
+                    liveMode = it
+                    if (it) onDown(peerIp) else onUp()
+                },
+                colors = SwitchDefaults.colors(
+                    checkedTrackColor = TalkMint,
+                    checkedThumbColor = TalkBg
+                )
+            )
+        }
+        Spacer(Modifier.height(8.dp))
+        Box(
+            contentAlignment = Alignment.Center,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            RoundPttButton(
+                transmitting = transmitting,
+                enabled = true,
+                onDown = { onDown(peerIp) },
+                onUp = { if (!liveMode) onUp() }
+            )
+        }
+        Spacer(Modifier.height(8.dp))
+        MonoLabel(
+            if (transmitting) "Transmitting..." else "Hold to talk · works screen-off",
+            color = if (transmitting) TalkMint else TalkMuted,
+            modifier = Modifier.align(Alignment.CenterHorizontally)
+        )
+        Spacer(Modifier.height(16.dp))
+    }
+}
+
+@Composable
+fun DirectDisabled(
+    onSwitchToLan: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Column(
+        modifier = modifier
+            .fillMaxSize()
+            .padding(24.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center
+    ) {
+        MonoLabel("P2P NEEDS LAN")
+        Spacer(Modifier.height(8.dp))
+        Text(
+            "Direct talk is device-to-device over WiFi. Switch transport up top to use it.",
+            color = TalkTextDim,
+            fontSize = 14.sp
+        )
+        Spacer(Modifier.height(16.dp))
+        Button(
+            onClick = onSwitchToLan,
+            shape = RoundedCornerShape(12.dp),
+            colors = ButtonDefaults.buttonColors(containerColor = TalkMint, contentColor = TalkBg)
+        ) {
+            Text("SWITCH TO LAN", fontWeight = FontWeight.Bold)
+        }
+    }
+}
+
+/* ─── JOIN (cloud) ─────────────────────────────────────── */
 
 @Composable
 fun JoinScreen(
@@ -452,15 +553,12 @@ fun JoinScreen(
 ) {
     val canJoin = name.isNotBlank() && (selectedId != null || freeRoom.isNotBlank())
     Column(
-        modifier = modifier
-            .fillMaxSize()
-            .background(TalkBg)
-            .statusBarsPadding()
+        modifier = modifier.fillMaxSize()
     ) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(start = 16.dp, end = 16.dp, top = 24.dp, bottom = 16.dp),
+                .padding(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 16.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             TalkBackButton(onBack = onBack)
@@ -581,7 +679,7 @@ fun JoinScreen(
                         if (serverOpen) "Hide server settings" else "Server settings",
                         color = TalkTextDim,
                         fontSize = 12.sp,
-                        fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
+                        fontFamily = FontFamily.Monospace
                     )
                 }
                 Row(
@@ -645,7 +743,7 @@ fun JoinScreen(
     }
 }
 
-/* ─── ACTIVE ───────────────────────────────────────────── */
+/* ─── ACTIVE (shared room UI, both transports) ─────────── */
 
 @Composable
 fun ActiveScreen(
@@ -656,10 +754,11 @@ fun ActiveScreen(
     transmitting: Boolean,
     liveMode: Boolean,
     onToggleLive: (Boolean) -> Unit,
-    qualityDot: (ChatPeer) -> androidx.compose.ui.graphics.Color?,
+    qualityDot: (ChatPeer) -> Color?,
     presets: List<String>,
     onSendText: (String) -> Unit,
-    texts: List<com.example.lanptt.service.TextMsg>,
+    texts: List<TextMsg>,
+    transportLine: String = "Connected · Cloud",
     onBack: () -> Unit,
     onDown: () -> Unit,
     onUp: () -> Unit,
@@ -667,15 +766,12 @@ fun ActiveScreen(
 ) {
     val anyoneSpeaking = peers.any(isSpeaking)
     Column(
-        modifier = modifier
-            .fillMaxSize()
-            .background(TalkBg)
-            .statusBarsPadding()
+        modifier = modifier.fillMaxSize()
     ) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(start = 16.dp, end = 16.dp, top = 24.dp, bottom = 16.dp),
+                .padding(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 16.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             TalkBackButton(onBack = onBack)
@@ -692,69 +788,79 @@ fun ActiveScreen(
                 .height(1.dp)
                 .background(TalkBorder)
         )
-        Column(modifier = Modifier.padding(start = 16.dp, top = 20.dp, bottom = 8.dp)) {
-            MonoLabel("IN CHANNEL")
-            Spacer(Modifier.height(12.dp))
-            LazyRow(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                items(peers, key = { it.id }) { p ->
-                    val speaking = isSpeaking(p)
-                    Column(
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        modifier = Modifier.width(58.dp)
-                    ) {
-                        Avatar(peer = p, size = 52.dp, speaking = speaking, dot = qualityDot(p))
-                        Spacer(Modifier.height(8.dp))
-                        Text(
-                            if (p.id == "me") "You" else p.name.split(" ").firstOrNull() ?: p.name,
-                            color = if (speaking) TalkMint else TalkTextDim,
-                            fontSize = 12.sp,
-                            fontWeight = if (speaking) FontWeight.SemiBold else FontWeight.Normal
-                        )
-                    }
-                }
-            }
-        }
+        // Scrollable middle: roster, speaker card, texts. Presets + PTT stay pinned below.
         Column(
             modifier = Modifier
                 .weight(1f)
                 .fillMaxWidth()
-                .padding(24.dp),
-            verticalArrangement = Arrangement.Center,
-            horizontalAlignment = Alignment.CenterHorizontally
+                .verticalScroll(rememberScrollState())
         ) {
-            if (speaker != null) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(16.dp))
-                        .background(TalkCard)
-                        .border(1.dp, TalkMint, RoundedCornerShape(16.dp))
-                        .padding(20.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Avatar(peer = speaker, size = 48.dp, speaking = true)
-                    Spacer(Modifier.width(16.dp))
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(speaker.name, color = TalkText, fontWeight = FontWeight.SemiBold)
-                        MonoLabel("Transmitting...", color = TalkMint)
+            Column(modifier = Modifier.padding(start = 16.dp, top = 20.dp, bottom = 8.dp)) {
+                MonoLabel("IN CHANNEL")
+                Spacer(Modifier.height(12.dp))
+                LazyRow(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                    items(peers, key = { it.id }) { p ->
+                        val speaking = isSpeaking(p)
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            modifier = Modifier.width(58.dp)
+                        ) {
+                            Avatar(peer = p, size = 52.dp, speaking = speaking, dot = qualityDot(p))
+                            Spacer(Modifier.height(8.dp))
+                            Text(
+                                if (p.id == "me") "You" else p.name.split(" ").firstOrNull() ?: p.name,
+                                color = if (speaking) TalkMint else TalkTextDim,
+                                fontSize = 12.sp,
+                                fontWeight = if (speaking) FontWeight.SemiBold else FontWeight.Normal
+                            )
+                        }
                     }
-                    WaveformBars(active = true)
                 }
-            } else {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(16.dp))
-                        .background(Color(0xFF181B22))
-                        .border(1.dp, TalkBorder, RoundedCornerShape(16.dp))
-                        .padding(20.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(
-                        "Channel is quiet — hold to talk",
-                        color = TalkMuted,
-                        fontSize = 14.sp
-                    )
+            }
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 24.dp, vertical = 12.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                if (speaker != null) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(16.dp))
+                            .background(TalkCard)
+                            .border(1.dp, TalkMint, RoundedCornerShape(16.dp))
+                            .padding(20.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Avatar(peer = speaker, size = 48.dp, speaking = true)
+                        Spacer(Modifier.width(16.dp))
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(speaker.name, color = TalkText, fontWeight = FontWeight.SemiBold)
+                            MonoLabel("Transmitting...", color = TalkMint)
+                        }
+                        WaveformBars(active = true)
+                    }
+                } else {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(16.dp))
+                            .background(Color(0xFF181B22))
+                            .border(1.dp, TalkBorder, RoundedCornerShape(16.dp))
+                            .padding(20.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            "Channel is quiet — hold to talk",
+                            color = TalkMuted,
+                            fontSize = 14.sp
+                        )
+                    }
+                }
+                if (texts.isNotEmpty()) {
+                    Spacer(Modifier.height(12.dp))
+                    IncomingTexts(msgs = texts, modifier = Modifier.fillMaxWidth())
                 }
             }
         }
@@ -762,14 +868,8 @@ fun ActiveScreen(
             horizontalAlignment = Alignment.CenterHorizontally,
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(bottom = 48.dp)
+                .padding(bottom = 16.dp)
         ) {
-            if (texts.isNotEmpty()) {
-                IncomingTexts(
-                    msgs = texts,
-                    modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp)
-                )
-            }
             if (presets.isNotEmpty()) {
                 QuickTextRow(
                     presets = presets,
@@ -778,9 +878,8 @@ fun ActiveScreen(
                 )
             }
             Row(
-                modifier = Modifier.padding(bottom = 12.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalAlignment = Alignment.CenterVertically
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 MonoLabel("LIVE MONITOR")
                 Switch(
@@ -792,14 +891,15 @@ fun ActiveScreen(
                     )
                 )
             }
+            Spacer(Modifier.height(8.dp))
             RoundPttButton(
                 transmitting = transmitting,
                 enabled = true,
                 onDown = onDown,
                 onUp = { if (!liveMode) onUp() }
             )
-            Spacer(Modifier.height(16.dp))
-            MonoLabel("Connected · Cloud")
+            Spacer(Modifier.height(8.dp))
+            MonoLabel(transportLine)
         }
     }
 }
@@ -808,9 +908,9 @@ fun ActiveScreen(
 
 private val MockPeers = listOf(
     MePeer,
-    ChatPeer("u1", "Marcus Chen", "MC", androidx.compose.ui.graphics.Color(0xFF6C63FF)),
-    ChatPeer("u2", "Leila Hassan", "LH", androidx.compose.ui.graphics.Color(0xFFFF6584)),
-    ChatPeer("u3", "Tom Okafor", "TO", androidx.compose.ui.graphics.Color(0xFF43BCCD))
+    ChatPeer("u1", "Marcus Chen", "MC", Color(0xFF6C63FF)),
+    ChatPeer("u2", "Leila Hassan", "LH", Color(0xFFFF6584)),
+    ChatPeer("u3", "Tom Okafor", "TO", Color(0xFF43BCCD))
 )
 
 @Preview(showBackground = true, backgroundColor = 0xFF0D0F13)
@@ -826,19 +926,7 @@ fun HomePreview() {
             freeWord = "",
             onFreeWord = {},
             onJoinWord = {},
-            mode = HomeMode.CLOUD,
-            onMode = {},
-            ownIp = "192.168.1.10",
-            peerIp = "",
-            onPeerIp = {},
-            onOpenLanTalk = {},
-            lanName = "Alex",
-            onLanName = {},
-            nearby = listOf(
-                com.example.lanptt.lan.LanPeer("Ben", "192.168.1.42", 0L)
-            ),
-            onPickPeer = {},
-            onJoin = {}, onTapChannel = {}
+            onTapChannel = {}
         )
     }
 }
@@ -878,6 +966,27 @@ fun ActivePreview() {
             onSendText = {},
             texts = emptyList(),
             onBack = {}, onDown = {}, onUp = {}
+        )
+    }
+}
+
+@Preview(showBackground = true, backgroundColor = 0xFF0D0F13)
+@Composable
+fun DirectPreview() {
+    LanPttTheme(darkTheme = true) {
+        DirectPage(
+            ownIp = "192.168.1.10",
+            lanName = "Alex", onLanName = {},
+            peerIp = "", onPeerIp = {},
+            nearby = listOf(
+                LanPeer("Ben", "192.168.1.42", System.currentTimeMillis(), 82, "")
+            ),
+            transmitting = false,
+            status = "Ready.",
+            presets = listOf("OK"),
+            onSendText = {},
+            texts = emptyList(),
+            onDown = {}, onUp = {}
         )
     }
 }
