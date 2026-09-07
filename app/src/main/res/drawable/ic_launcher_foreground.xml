@@ -1,0 +1,19 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- //T glyph in TalkNet mint on transparent (background supplies #0D0F13) -->
+    <path
+        android:fillColor="#3EB489"
+        android:pathData="M36,26 L26,82 L34,82 L44,26 Z" />
+    <path
+        android:fillColor="#3EB489"
+        android:pathData="M52,26 L42,82 L50,82 L60,26 Z" />
+    <path
+        android:fillColor="#3EB489"
+        android:pathData="M58,26 L84,26 L84,34 L58,34 Z" />
+    <path
+        android:fillColor="#3EB489"
+        android:pathData="M67,34 L73,34 L73,82 L67,82 Z" />
+</vector>
