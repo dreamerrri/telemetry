@@ -3,13 +3,13 @@ package com.example.lanptt
 import android.Manifest
 import android.content.Intent
 import android.content.pm.PackageManager
-import android.media.AudioAttributes
-import android.media.AudioFormat
 import android.media.AudioManager
-import android.media.AudioRecord
-import android.media.AudioTrack
-import android.media.MediaRecorder
+import android.net.Uri
+import android.os.Build
 import android.os.Bundle
+import android.os.PowerManager
+import android.provider.Settings
+import android.view.KeyEvent
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.background
@@ -30,6 +30,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
@@ -46,9 +48,13 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.lanptt.lan.LanDiscovery
 import com.example.lanptt.lan.LanPeer
+import com.example.lanptt.service.SessionState
+import com.example.lanptt.service.TelemetryService
 import com.example.lanptt.ui.talknet.Avatar
 import com.example.lanptt.ui.talknet.ChatPeer
+import com.example.lanptt.ui.talknet.IncomingTexts
 import com.example.lanptt.ui.talknet.MonoLabel
+import com.example.lanptt.ui.talknet.QuickTextRow
 import com.example.lanptt.ui.talknet.RoundPttButton
 import com.example.lanptt.ui.talknet.peerColorForName
 import com.example.lanptt.ui.theme.LanPttTheme
@@ -59,48 +65,61 @@ import com.example.lanptt.ui.theme.TalkMint
 import com.example.lanptt.ui.theme.TalkMuted
 import com.example.lanptt.ui.theme.TalkText
 import com.example.lanptt.ui.theme.TalkTextDim
-import java.net.DatagramPacket
-import java.net.DatagramSocket
-import java.net.InetAddress
 
 class MainActivity : ComponentActivity() {
 
     companion object {
-        const val PORT = 50005
-        const val SAMPLE_RATE = 16000
         const val REQ_AUDIO = 1001
     }
 
     private var ownIp by mutableStateOf("...")
-    private var status by mutableStateOf("starting...")
-    private var transmitting by mutableStateOf(false)
-
-    @Volatile private var receiving = false
-    private var rxSocket: DatagramSocket? = null
-    private var rxThread: Thread? = null
+    private var lanPeer by mutableStateOf("")
+    private var quickTexts by mutableStateOf(listOf("OK", "On my way", "Loud and clear"))
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        ownIp = detectOwnIp()
+        ownIp = LanDiscovery.detectOwnIp()
+        lanPeer = intent.getStringExtra("peerIp").orEmpty()
+        quickTexts = loadQuickTexts()
 
+        val need = mutableListOf<String>()
         if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
-            requestPermissions(arrayOf(Manifest.permission.RECORD_AUDIO), REQ_AUDIO)
+            need += Manifest.permission.RECORD_AUDIO
         }
+        if (Build.VERSION.SDK_INT >= 33 &&
+            checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+        ) {
+            need += Manifest.permission.POST_NOTIFICATIONS
+        }
+        if (need.isNotEmpty()) requestPermissions(need.toTypedArray(), REQ_AUDIO)
 
         volumeControlStream = AudioManager.STREAM_MUSIC
-        startReceiver()
+        maybeAskBattery()
+
+        // Audio lives in the foreground service (survives screen-off).
+        startForegroundService(
+            TelemetryService.cmd(this, TelemetryService.ACTION_START)
+                .putExtra("name", lanName())
+        )
 
         setContent {
             LanPttTheme(darkTheme = true) {
+                val status by SessionState.lanStatus.collectAsState()
+                val transmitting by SessionState.lanTransmitting.collectAsState()
                 val nearby by LanDiscovery.peers.collectAsState()
+                val texts by SessionState.lanTexts.collectAsState()
                 LanScreen(
                     ownIp = ownIp,
                     status = status,
                     transmitting = transmitting,
-                    initialPeerIp = intent.getStringExtra("peerIp").orEmpty(),
+                    initialPeerIp = lanPeer,
                     nearby = nearby.values.sortedBy { it.name.lowercase() },
                     onPeerTalk = { peerIp -> startTalking(peerIp) },
                     onStopTalk = { stopTalking() },
+                    onPeerIpChange = { lanPeer = it },
+                    presets = quickTexts,
+                    onSendText = { sendText(it) },
+                    texts = texts,
                     onOpenCloud = { startActivity(Intent(this, LiveKitActivity::class.java)) }
                 )
             }
@@ -109,151 +128,96 @@ class MainActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
-        ownIp = detectOwnIp()
-        val name = getSharedPreferences("lk", MODE_PRIVATE)
-            .getString("lanName", android.os.Build.MODEL ?: "Android") ?: "Android"
-        LanDiscovery.start(name)
+        ownIp = LanDiscovery.detectOwnIp()
+        quickTexts = loadQuickTexts()
     }
 
-    override fun onPause() {
-        LanDiscovery.stop()
-        super.onPause()
+    private fun loadQuickTexts(): List<String> {
+        val raw = getSharedPreferences("lk", MODE_PRIVATE)
+            .getString("quickTexts", "OK\nOn my way\nLoud and clear\nStand by\nYes\nNo").orEmpty()
+        return raw.split("\n").map { it.trim() }.filter { it.isNotEmpty() }.take(8)
+            .ifEmpty { listOf("OK") }
+    }
+
+    private fun lanName(): String =
+        getSharedPreferences("lk", MODE_PRIVATE)
+            .getString("lanName", Build.MODEL ?: "Android") ?: "Android"
+
+    private fun volPttEnabled(): Boolean =
+        getSharedPreferences("lk", MODE_PRIVATE).getBoolean("volPtt", true)
+
+    override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
+        if (keyCode == KeyEvent.KEYCODE_VOLUME_DOWN && volPttEnabled() && lanPeer.isNotBlank()) {
+            startTalking(lanPeer)
+            return true
+        }
+        return super.onKeyDown(keyCode, event)
+    }
+
+    override fun onKeyUp(keyCode: Int, event: KeyEvent?): Boolean {
+        if (keyCode == KeyEvent.KEYCODE_VOLUME_DOWN && volPttEnabled()) {
+            stopTalking()
+            return true
+        }
+        return super.onKeyUp(keyCode, event)
+    }
+
+    private fun maybeAskBattery() {
+        val prefs = getSharedPreferences("lk", MODE_PRIVATE)
+        if (prefs.getBoolean("battAsked", false)) return
+        try {
+            val pm = getSystemService(PowerManager::class.java)
+            if (!pm.isIgnoringBatteryOptimizations(packageName)) {
+                startActivity(
+                    Intent(
+                        Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
+                        Uri.parse("package:$packageName")
+                    )
+                )
+            }
+        } catch (_: Exception) { }
+        prefs.edit().putBoolean("battAsked", true).apply()
     }
 
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<String>, grantResults: IntArray) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
-        if (requestCode == REQ_AUDIO) {
-            status = if (grantResults.isNotEmpty() && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
-                "Ready. Enter peer IP, hold to talk."
-            } else {
-                "Mic permission denied - cannot talk."
-            }
+        if (requestCode == REQ_AUDIO &&
+            permissions.contains(Manifest.permission.RECORD_AUDIO) &&
+            (grantResults.isEmpty() || grantResults[0] != PackageManager.PERMISSION_GRANTED)
+        ) {
+            SessionState.lanStatus.value = "Mic permission denied - cannot talk."
         }
     }
 
-    private fun detectOwnIp(): String = LanDiscovery.detectOwnIp()
-
-    private fun startReceiver() {
-        if (receiving) return
-        receiving = true
-        rxThread = Thread({
-            try {
-                val minBuf = AudioTrack.getMinBufferSize(
-                    SAMPLE_RATE,
-                    AudioFormat.CHANNEL_OUT_MONO,
-                    AudioFormat.ENCODING_PCM_16BIT
-                )
-                val track = AudioTrack.Builder()
-                    .setAudioAttributes(
-                        AudioAttributes.Builder()
-                            .setUsage(AudioAttributes.USAGE_MEDIA)
-                            .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
-                            .build()
-                    )
-                    .setAudioFormat(
-                        AudioFormat.Builder()
-                            .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
-                            .setSampleRate(SAMPLE_RATE)
-                            .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
-                            .build()
-                    )
-                    .setBufferSizeInBytes(minBuf * 4)
-                    .setTransferMode(AudioTrack.MODE_STREAM)
-                    .build()
-                track.play()
-
-                rxSocket = DatagramSocket(PORT).apply { broadcast = true }
-                runOnUiThread { status = "Ready. Enter peer IP, hold to talk." }
-                val buf = ByteArray(2048)
-                while (receiving) {
-                    try {
-                        val pkt = DatagramPacket(buf, buf.size)
-                        rxSocket?.receive(pkt)
-                        if (pkt.length > 0) {
-                            track.write(pkt.data, 0, pkt.length)
-                            val from = pkt.address.hostAddress
-                            runOnUiThread { status = "Receiving ${pkt.length}B from $from..." }
-                        }
-                    } catch (e: Exception) {
-                        if (!receiving) break
-                    }
-                }
-                track.stop()
-                track.release()
-            } catch (e: Exception) {
-                runOnUiThread { status = "Listen failed: ${e.message}" }
-            }
-        }, "ptt-rx")
-        rxThread?.start()
-    }
-
     private fun startTalking(peerIp: String) {
-        if (transmitting) return
         if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
             requestPermissions(arrayOf(Manifest.permission.RECORD_AUDIO), REQ_AUDIO)
             return
         }
         if (peerIp.isBlank()) {
-            status = "Enter peer IP first."
+            SessionState.lanStatus.value = "Enter peer IP first."
             return
         }
-        val peer: InetAddress
-        try {
-            peer = InetAddress.getByName(peerIp.trim())
-        } catch (_: Exception) {
-            status = "Bad peer IP."
-            return
-        }
-        transmitting = true
-        status = "Talking -> ${peerIp.trim()}..."
-
-        Thread({
-            var rec: AudioRecord? = null
-            var sock: DatagramSocket? = null
-            try {
-                val minBuf = AudioRecord.getMinBufferSize(
-                    SAMPLE_RATE,
-                    AudioFormat.CHANNEL_IN_MONO,
-                    AudioFormat.ENCODING_PCM_16BIT
-                )
-                rec = AudioRecord(
-                    MediaRecorder.AudioSource.MIC,
-                    SAMPLE_RATE,
-                    AudioFormat.CHANNEL_IN_MONO,
-                    AudioFormat.ENCODING_PCM_16BIT,
-                    minBuf * 2
-                )
-                sock = DatagramSocket().apply { broadcast = true }
-                rec.startRecording()
-                val buf = ByteArray(1024)
-                while (transmitting) {
-                    val n = rec.read(buf, 0, buf.size)
-                    if (n > 0) {
-                        val pkt = DatagramPacket(buf, n, peer, PORT)
-                        sock.send(pkt)
-                    }
-                }
-            } catch (e: Exception) {
-                runOnUiThread { status = "Talk failed: ${e.message}" }
-            } finally {
-                try { rec?.stop() } catch (_: Exception) {}
-                try { rec?.release() } catch (_: Exception) {}
-                try { sock?.close() } catch (_: Exception) {}
-            }
-        }, "ptt-tx").start()
+        startService(
+            TelemetryService.cmd(this, TelemetryService.ACTION_LAN_DOWN)
+                .putExtra("peer", peerIp.trim())
+        )
     }
 
     private fun stopTalking() {
-        if (!transmitting) return
-        transmitting = false
-        status = "Ready. Enter peer IP, hold to talk."
+        startService(TelemetryService.cmd(this, TelemetryService.ACTION_LAN_UP))
     }
 
-    override fun onDestroy() {
-        receiving = false
-        transmitting = false
-        try { rxSocket?.close() } catch (_: Exception) {}
-        super.onDestroy()
+    private fun sendText(text: String) {
+        if (lanPeer.isBlank()) {
+            SessionState.lanStatus.value = "Pick a peer first."
+            return
+        }
+        startService(
+            TelemetryService.cmd(this, TelemetryService.ACTION_LAN_TEXT)
+                .putExtra("peer", lanPeer.trim())
+                .putExtra("text", text)
+        )
     }
 }
 
@@ -266,9 +230,14 @@ fun LanScreen(
     onStopTalk: () -> Unit,
     onOpenCloud: () -> Unit,
     initialPeerIp: String = "",
-    nearby: List<LanPeer> = emptyList()
+    nearby: List<LanPeer> = emptyList(),
+    onPeerIpChange: (String) -> Unit = {},
+    presets: List<String> = emptyList(),
+    onSendText: (String) -> Unit = {},
+    texts: List<com.example.lanptt.service.TextMsg> = emptyList()
 ) {
     var peerIp by rememberSaveable(initialPeerIp) { mutableStateOf(initialPeerIp) }
+    var liveMode by rememberSaveable { mutableStateOf(false) }
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -300,13 +269,17 @@ fun LanScreen(
         Spacer(Modifier.height(8.dp))
         OutlinedTextField(
             value = peerIp,
-            onValueChange = { peerIp = it },
+            onValueChange = { peerIp = it; onPeerIpChange(it) },
             placeholder = { Text("e.g. 192.168.1.42", color = TalkMuted) },
             singleLine = true,
             modifier = Modifier.fillMaxWidth()
         )
         Spacer(Modifier.height(8.dp))
         MonoLabel("Status: $status", color = TalkTextDim, modifier = Modifier.fillMaxWidth())
+        if (texts.isNotEmpty()) {
+            Spacer(Modifier.height(8.dp))
+            IncomingTexts(msgs = texts, modifier = Modifier.fillMaxWidth())
+        }
         if (nearby.isNotEmpty()) {
             Spacer(Modifier.height(12.dp))
             MonoLabel("NEARBY (${nearby.size})", modifier = Modifier.fillMaxWidth())
@@ -328,7 +301,7 @@ fun LanScreen(
                             if (peerIp == peer.ip) TalkMint else TalkBorder,
                             RoundedCornerShape(12.dp)
                         )
-                        .clickable { peerIp = peer.ip }
+                        .clickable { peerIp = peer.ip; onPeerIpChange(peer.ip) }
                         .padding(12.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
@@ -346,21 +319,58 @@ fun LanScreen(
                     Spacer(Modifier.width(12.dp))
                     Column(modifier = Modifier.weight(1f)) {
                         Text(label, color = TalkText, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
-                        MonoLabel(peer.ip, color = TalkTextDim)
+                        val ageS = ((System.currentTimeMillis() - peer.lastSeen) / 1000).toInt()
+                        val sub = buildString {
+                            append(peer.ip)
+                            if (peer.battery >= 0) {
+                                append(" · ${peer.battery}%")
+                            }
+                            if (ageS > 3) append(" · ${ageS}s")
+                        }
+                        MonoLabel(
+                            sub,
+                            color = if (peer.battery in 0..19) androidx.compose.ui.graphics.Color(0xFFF87171) else TalkTextDim
+                        )
                     }
                 }
                 Spacer(Modifier.height(8.dp))
             }
         }
         Spacer(Modifier.weight(1f))
+        if (presets.isNotEmpty()) {
+            QuickTextRow(
+                presets = presets,
+                onSend = onSendText,
+                modifier = Modifier.fillMaxWidth()
+            )
+            Spacer(Modifier.height(12.dp))
+        }
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            MonoLabel("LIVE MONITOR")
+            Switch(
+                checked = liveMode,
+                onCheckedChange = {
+                    liveMode = it
+                    if (it) onPeerTalk(peerIp) else onStopTalk()
+                },
+                colors = SwitchDefaults.colors(
+                    checkedTrackColor = TalkMint,
+                    checkedThumbColor = TalkBg
+                )
+            )
+        }
+        Spacer(Modifier.height(8.dp))
         RoundPttButton(
             transmitting = transmitting,
             enabled = true,
             onDown = { onPeerTalk(peerIp) },
-            onUp = { onStopTalk() }
+            onUp = { if (!liveMode) onStopTalk() }
         )
         Spacer(Modifier.height(8.dp))
-        MonoLabel(if (transmitting) "Transmitting..." else "Hold to talk", color = if (transmitting) TalkMint else TalkMuted)
+        MonoLabel(if (transmitting) "Transmitting..." else "Hold to talk · works screen-off", color = if (transmitting) TalkMint else TalkMuted)
         Spacer(Modifier.weight(1f))
         Button(
             onClick = onOpenCloud,

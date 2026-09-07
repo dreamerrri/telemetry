@@ -26,6 +26,8 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -96,6 +98,10 @@ enum class HomeMode { LAN, CLOUD }
 @Composable
 fun HomeScreen(
     channels: List<TalkChannel>,
+    recents: List<TalkChannel>,
+    freeWord: String,
+    onFreeWord: (String) -> Unit,
+    onJoinWord: () -> Unit,
     mode: HomeMode,
     onMode: (HomeMode) -> Unit,
     ownIp: String,
@@ -181,53 +187,51 @@ fun HomeScreen(
                     .padding(horizontal = 16.dp, vertical = 12.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                items(channels, key = { it.id }) { ch ->
-                    Row(
+                items(channels, key = { "pin-${it.id}" }) { ch ->
+                    ChannelCard(ch = ch, onTap = { onTapChannel(ch) })
+                }
+                if (recents.isNotEmpty()) {
+                    item(key = "recent-label") {
+                        MonoLabel("RECENT", modifier = Modifier.padding(top = 8.dp))
+                    }
+                    items(recents, key = { "recent-${it.id}" }) { ch ->
+                        ChannelCard(ch = ch, onTap = { onTapChannel(ch) })
+                    }
+                }
+                item(key = "free-word") {
+                    Column(
                         modifier = Modifier
                             .fillMaxWidth()
                             .clip(RoundedCornerShape(16.dp))
                             .background(TalkCard)
                             .border(1.dp, TalkBorder, RoundedCornerShape(16.dp))
-                            .clickable { onTapChannel(ch) }
-                            .padding(16.dp),
-                        verticalAlignment = Alignment.CenterVertically
+                            .padding(16.dp)
                     ) {
-                        Box(
-                            modifier = Modifier
-                                .size(40.dp)
-                                .background(TalkCard2, RoundedCornerShape(12.dp))
-                                .border(1.dp, TalkBorder, RoundedCornerShape(12.dp)),
-                            contentAlignment = Alignment.Center
+                        MonoLabel("JOIN BY WORD")
+                        Spacer(Modifier.height(8.dp))
+                        OutlinedTextField(
+                            value = freeWord,
+                            onValueChange = onFreeWord,
+                            placeholder = { Text("e.g. night-shift", color = TalkMuted) },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                        Spacer(Modifier.height(8.dp))
+                        MonoLabel("Any word is a channel. Same word = same room.")
+                        Spacer(Modifier.height(8.dp))
+                        Button(
+                            onClick = onJoinWord,
+                            enabled = freeWord.isNotBlank(),
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(12.dp),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = TalkMint,
+                                contentColor = TalkBg,
+                                disabledContainerColor = TalkCard2,
+                                disabledContentColor = TalkMuted
+                            )
                         ) {
-                            RadioIcon(active = ch.live)
-                        }
-                        Spacer(Modifier.width(16.dp))
-                        Column(modifier = Modifier.weight(1f)) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Text(ch.name, color = TalkText, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
-                                if (ch.live) {
-                                    Spacer(Modifier.width(8.dp))
-                                    PulsingDot()
-                                }
-                            }
-                            Spacer(Modifier.height(4.dp))
-                            Row {
-                                MonoLabel(
-                                    if (ch.knownPeers.isEmpty()) "Tap to join"
-                                    else "${ch.knownPeers.size} online",
-                                    color = TalkTextDim
-                                )
-                                if (ch.live) {
-                                    MonoLabel("  · live", color = TalkMint)
-                                }
-                            }
-                        }
-                        Column(
-                            horizontalAlignment = Alignment.End,
-                            verticalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            if (ch.knownPeers.isNotEmpty()) AvatarStack(ch.knownPeers)
-                            if (ch.live) WaveformBars(active = true)
+                            Text("JOIN", fontWeight = FontWeight.Bold)
                         }
                     }
                 }
@@ -362,6 +366,64 @@ fun HomeScreen(
     }
 }
 
+/* ─── Channel card (shared Home row) ───────────────────── */
+
+@Composable
+fun ChannelCard(
+    ch: TalkChannel,
+    onTap: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(16.dp))
+            .background(TalkCard)
+            .border(1.dp, TalkBorder, RoundedCornerShape(16.dp))
+            .clickable(onClick = onTap)
+            .padding(16.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Box(
+            modifier = Modifier
+                .size(40.dp)
+                .background(TalkCard2, RoundedCornerShape(12.dp))
+                .border(1.dp, TalkBorder, RoundedCornerShape(12.dp)),
+            contentAlignment = Alignment.Center
+        ) {
+            RadioIcon(active = ch.live)
+        }
+        Spacer(Modifier.width(16.dp))
+        Column(modifier = Modifier.weight(1f)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(ch.name, color = TalkText, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+                if (ch.live) {
+                    Spacer(Modifier.width(8.dp))
+                    PulsingDot()
+                }
+            }
+            Spacer(Modifier.height(4.dp))
+            Row {
+                MonoLabel(
+                    if (ch.knownPeers.isEmpty()) "Tap to join"
+                    else "${ch.knownPeers.size} online",
+                    color = TalkTextDim
+                )
+                if (ch.live) {
+                    MonoLabel("  · live", color = TalkMint)
+                }
+            }
+        }
+        Column(
+            horizontalAlignment = Alignment.End,
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            if (ch.knownPeers.isNotEmpty()) AvatarStack(ch.knownPeers)
+            if (ch.live) WaveformBars(active = true)
+        }
+    }
+}
+
 /* ─── JOIN ─────────────────────────────────────────────── */
 
 @Composable
@@ -371,6 +433,12 @@ fun JoinScreen(
     channels: List<TalkChannel>,
     selectedId: String?,
     onSelect: (String) -> Unit,
+    freeRoom: String,
+    onFreeRoom: (String) -> Unit,
+    volPtt: Boolean,
+    onVolPtt: (Boolean) -> Unit,
+    presetsText: String,
+    onPresetsText: (String) -> Unit,
     url: String,
     onUrl: (String) -> Unit,
     worker: String,
@@ -382,7 +450,7 @@ fun JoinScreen(
     onBack: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val canJoin = name.isNotBlank() && selectedId != null
+    val canJoin = name.isNotBlank() && (selectedId != null || freeRoom.isNotBlank())
     Column(
         modifier = modifier
             .fillMaxSize()
@@ -425,6 +493,21 @@ fun JoinScreen(
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth()
                 )
+            }
+            Column {
+                MonoLabel("OR TYPE A NEW ROOM")
+                Spacer(Modifier.height(8.dp))
+                OutlinedTextField(
+                    value = freeRoom,
+                    onValueChange = onFreeRoom,
+                    placeholder = { Text("e.g. night-shift", color = TalkMuted) },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                if (freeRoom.isNotBlank()) {
+                    Spacer(Modifier.height(4.dp))
+                    MonoLabel("Joining '${freeRoom.trim()}' — overrides selection above.")
+                }
             }
             Column {
                 MonoLabel("SELECT CHANNEL")
@@ -483,12 +566,37 @@ fun JoinScreen(
                 }
             }
             Column {
+                MonoLabel("QUICK TEXTS (ONE PER LINE, MAX 8)")
+                Spacer(Modifier.height(8.dp))
+                OutlinedTextField(
+                    value = presetsText,
+                    onValueChange = onPresetsText,
+                    singleLine = false,
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+            Column {
                 TextButton(onClick = onToggleServer) {
                     Text(
                         if (serverOpen) "Hide server settings" else "Server settings",
                         color = TalkTextDim,
                         fontSize = 12.sp,
                         fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
+                    )
+                }
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    MonoLabel("VOLUME-DOWN = PTT")
+                    Switch(
+                        checked = volPtt,
+                        onCheckedChange = onVolPtt,
+                        colors = SwitchDefaults.colors(
+                            checkedTrackColor = TalkMint,
+                            checkedThumbColor = TalkBg
+                        )
                     )
                 }
                 if (serverOpen) {
@@ -546,6 +654,12 @@ fun ActiveScreen(
     isSpeaking: (ChatPeer) -> Boolean,
     speaker: ChatPeer?,
     transmitting: Boolean,
+    liveMode: Boolean,
+    onToggleLive: (Boolean) -> Unit,
+    qualityDot: (ChatPeer) -> androidx.compose.ui.graphics.Color?,
+    presets: List<String>,
+    onSendText: (String) -> Unit,
+    texts: List<com.example.lanptt.service.TextMsg>,
     onBack: () -> Unit,
     onDown: () -> Unit,
     onUp: () -> Unit,
@@ -588,7 +702,7 @@ fun ActiveScreen(
                         horizontalAlignment = Alignment.CenterHorizontally,
                         modifier = Modifier.width(58.dp)
                     ) {
-                        Avatar(peer = p, size = 52.dp, speaking = speaking)
+                        Avatar(peer = p, size = 52.dp, speaking = speaking, dot = qualityDot(p))
                         Spacer(Modifier.height(8.dp))
                         Text(
                             if (p.id == "me") "You" else p.name.split(" ").firstOrNull() ?: p.name,
@@ -650,11 +764,39 @@ fun ActiveScreen(
                 .fillMaxWidth()
                 .padding(bottom = 48.dp)
         ) {
+            if (texts.isNotEmpty()) {
+                IncomingTexts(
+                    msgs = texts,
+                    modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp)
+                )
+            }
+            if (presets.isNotEmpty()) {
+                QuickTextRow(
+                    presets = presets,
+                    onSend = onSendText,
+                    modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp)
+                )
+            }
+            Row(
+                modifier = Modifier.padding(bottom = 12.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                MonoLabel("LIVE MONITOR")
+                Switch(
+                    checked = liveMode,
+                    onCheckedChange = onToggleLive,
+                    colors = SwitchDefaults.colors(
+                        checkedTrackColor = TalkMint,
+                        checkedThumbColor = TalkBg
+                    )
+                )
+            }
             RoundPttButton(
                 transmitting = transmitting,
                 enabled = true,
                 onDown = onDown,
-                onUp = onUp
+                onUp = { if (!liveMode) onUp() }
             )
             Spacer(Modifier.height(16.dp))
             MonoLabel("Connected · Cloud")
@@ -680,6 +822,10 @@ fun HomePreview() {
                 TalkChannel("office", "Office", MockPeers.drop(1), live = true),
                 TalkChannel("warehouse", "Warehouse")
             ),
+            recents = listOf(TalkChannel("night-shift", "night-shift")),
+            freeWord = "",
+            onFreeWord = {},
+            onJoinWord = {},
             mode = HomeMode.CLOUD,
             onMode = {},
             ownIp = "192.168.1.10",
@@ -704,6 +850,9 @@ fun JoinPreview() {
         JoinScreen(
             name = "Alex", onName = {},
             channels = DefaultChannels, selectedId = "office", onSelect = {},
+            freeRoom = "", onFreeRoom = {},
+            volPtt = true, onVolPtt = {},
+            presetsText = "OK\nOn my way", onPresetsText = {},
             url = "wss://demo.livekit.cloud", onUrl = {},
             worker = "https://demo.workers.dev", onWorker = {},
             serverOpen = false, onToggleServer = {},
@@ -722,6 +871,12 @@ fun ActivePreview() {
             isSpeaking = { it.id == "u2" },
             speaker = MockPeers[2],
             transmitting = false,
+            liveMode = false,
+            onToggleLive = {},
+            qualityDot = { null },
+            presets = listOf("OK", "On my way"),
+            onSendText = {},
+            texts = emptyList(),
             onBack = {}, onDown = {}, onUp = {}
         )
     }

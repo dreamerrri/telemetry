@@ -7,7 +7,7 @@ import java.net.DatagramSocket
 import java.net.InetAddress
 import java.net.Inet4Address
 
-data class LanPeer(val name: String, val ip: String, val lastSeen: Long)
+data class LanPeer(val name: String, val ip: String, val lastSeen: Long, val battery: Int = -1)
 
 /**
  * LAN presence: UDP broadcast beacons (name + IP) + listener.
@@ -29,12 +29,12 @@ object LanDiscovery {
     private var listenSock: DatagramSocket? = null
 
     @Synchronized
-    fun start(displayName: String) {
+    fun start(displayName: String, battery: () -> Int = { -1 }) {
         refs++
         if (running) return
         running = true
         val name = displayName.trim().take(32).ifEmpty { android.os.Build.MODEL ?: "Android" }
-        Thread({ beaconLoop(name) }, "lan-beacon").apply { isDaemon = true; start() }
+        Thread({ beaconLoop(name, battery) }, "lan-beacon").apply { isDaemon = true; start() }
         Thread({ listenLoop() }, "lan-listen").apply { isDaemon = true; start() }
     }
 
@@ -113,14 +113,15 @@ object LanDiscovery {
         return out
     }
 
-    private fun beaconLoop(name: String) {
+    private fun beaconLoop(name: String, battery: () -> Int) {
         try {
             val sock = DatagramSocket().apply { broadcast = true }
             beaconSock = sock
             lastOwnIp = detectOwnIp()
-            val payload = (PREFIX + name).toByteArray()
             while (running) {
                 try {
+                    val clean = name.replace("|", "/")
+                    val payload = "$PREFIX$clean|${battery()}".toByteArray()
                     for (dest in broadcastAddrs()) {
                         try {
                             sock.send(DatagramPacket(payload, payload.size, dest, PORT))
@@ -162,10 +163,12 @@ object LanDiscovery {
                 if (ip == detectOwnIp()) continue
                 val msg = String(pkt.data, 0, pkt.length, Charsets.UTF_8)
                 if (!msg.startsWith(PREFIX)) continue
-                val peerName = msg.removePrefix(PREFIX).trim().take(48).ifEmpty { continue }
+                val parts = msg.removePrefix(PREFIX).split("|", limit = 3)
+                val peerName = parts.getOrNull(0)?.trim()?.take(48)?.ifEmpty { continue } ?: continue
+                val batt = parts.getOrNull(1)?.toIntOrNull() ?: -1
                 val now = System.currentTimeMillis()
                 val cur = _peers.value.toMutableMap()
-                cur[ip] = LanPeer(peerName, ip, now)
+                cur[ip] = LanPeer(peerName, ip, now, batt)
                 _peers.value = cur
             } catch (_: Exception) {
                 if (!running) break

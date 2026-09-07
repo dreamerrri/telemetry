@@ -14,10 +14,14 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
@@ -27,6 +31,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
@@ -42,6 +47,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
 import com.example.lanptt.ui.theme.TalkBg
+import com.example.lanptt.ui.theme.TalkBorder
+import com.example.lanptt.ui.theme.TalkCard
 import com.example.lanptt.ui.theme.TalkMint
 import com.example.lanptt.ui.theme.TalkMintBright
 import com.example.lanptt.ui.theme.TalkMuted
@@ -178,6 +185,7 @@ fun Avatar(
     peer: ChatPeer,
     size: Dp,
     speaking: Boolean = false,
+    dot: Color? = null,
     modifier: Modifier = Modifier
 ) {
     Box(
@@ -193,6 +201,73 @@ fun Avatar(
             fontSize = (size.value * 0.33f).sp,
             fontWeight = FontWeight.SemiBold
         )
+        if (dot != null) {
+            Box(
+                Modifier
+                    .align(Alignment.BottomEnd)
+                    .size((size.value * 0.24f).dp)
+                    .background(dot, CircleShape)
+                    .border(1.5.dp, TalkBg, CircleShape)
+            )
+        }
+    }
+}
+
+/** ConnectionQuality name -> dot color. */
+fun qualityColor(q: String?): Color? = when (q) {
+    "EXCELLENT", "GOOD" -> TalkMint
+    "POOR" -> Color(0xFFE9C46A)
+    "LOST" -> Color(0xFFF87171)
+    else -> null
+}
+
+/* ─── Quick texts ──────────────────────────────────────── */
+
+@Composable
+fun QuickTextRow(
+    presets: List<String>,
+    onSend: (String) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    LazyRow(
+        modifier = modifier,
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        items(presets, key = { it }) { p ->
+            Box(
+                contentAlignment = Alignment.Center,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(50.dp))
+                    .background(Color(0xFF252A3A))
+                    .border(1.dp, Color(0xFF2A2E3D), RoundedCornerShape(50.dp))
+                    .clickable { onSend(p) }
+                    .padding(horizontal = 14.dp, vertical = 8.dp)
+            ) {
+                Text(p, color = TalkText, fontSize = 13.sp)
+            }
+        }
+    }
+}
+
+@Composable
+fun IncomingTexts(
+    msgs: List<com.example.lanptt.service.TextMsg>,
+    modifier: Modifier = Modifier
+) {
+    Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        msgs.takeLast(3).forEach { m ->
+            Column(
+                Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(TalkCard)
+                    .border(1.dp, TalkBorder, RoundedCornerShape(12.dp))
+                    .padding(horizontal = 12.dp, vertical = 8.dp)
+            ) {
+                MonoLabel(m.sender.uppercase().take(24), color = TalkMint, fontSize = 10)
+                Text(m.text, color = TalkText, fontSize = 13.sp)
+            }
+        }
     }
 }
 

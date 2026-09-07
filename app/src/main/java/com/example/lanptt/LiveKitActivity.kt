@@ -5,8 +5,10 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.media.AudioManager
 import android.os.Bundle
+import android.view.KeyEvent
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateMapOf
@@ -14,32 +16,22 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.lifecycleScope
 import com.example.lanptt.lan.LanDiscovery
+import com.example.lanptt.service.SessionState
+import com.example.lanptt.service.TelemetryService
 import com.example.lanptt.ui.talknet.ActiveScreen
 import com.example.lanptt.ui.talknet.ChatPeer
 import com.example.lanptt.ui.talknet.DefaultChannels
 import com.example.lanptt.ui.talknet.HomeMode
 import com.example.lanptt.ui.talknet.HomeScreen
 import com.example.lanptt.ui.talknet.JoinScreen
-import com.example.lanptt.ui.talknet.MePeer
 import com.example.lanptt.ui.talknet.TalkChannel
-import com.example.lanptt.ui.talknet.initialsFor
-import com.example.lanptt.ui.talknet.peerColorFor
 import com.example.lanptt.ui.theme.LanPttTheme
-import io.livekit.android.LiveKit
-import io.livekit.android.events.RoomEvent
-import io.livekit.android.room.Room
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
-import org.json.JSONObject
-import java.net.HttpURLConnection
-import java.net.URL
 
 /**
  * Cloud mode (TalkNet UI): channel list -> join -> active PTT.
- * Mic starts MUTED; holding the button publishes, releasing mutes.
- * Join token is fetched from our Cloudflare Worker so the API secret
- * never ships in the app.
+ * All audio/network lives in [TelemetryService]; this screen only
+ * collects [SessionState] and sends command intents.
  */
 class LiveKitActivity : ComponentActivity() {
 
@@ -54,19 +46,18 @@ class LiveKitActivity : ComponentActivity() {
     private var prefsWorker by mutableStateOf("https://REPLACE.workers.dev")
     private var prefsName by mutableStateOf("")
     private var selectedChannel by mutableStateOf<String?>(null)
+    private var freeWord by mutableStateOf("")
+    private var freeRoom by mutableStateOf("")
+    private var recents by mutableStateOf<List<String>>(emptyList())
     private var serverOpen by mutableStateOf(false)
     private var joinError by mutableStateOf<String?>(null)
-
-    private var peers by mutableStateOf<List<ChatPeer>>(emptyList())
-    private var speakingIds by mutableStateOf<Set<String>>(emptySet())
-    private var connected by mutableStateOf(false)
-    private var talking by mutableStateOf(false)
+    private var joining by mutableStateOf(false)
+    private var volPtt by mutableStateOf(true)
+    private var liveMode by mutableStateOf(false)
+    private var presetsText by mutableStateOf("OK\nOn my way\nLoud and clear\nStand by\nYes\nNo")
 
     /** Last-known rosters per channel, shown on Home cards. */
     private val rosterCache = mutableStateMapOf<String, List<ChatPeer>>()
-    private var myIdentity: String = ""
-
-    private var room: Room? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -76,9 +67,15 @@ class LiveKitActivity : ComponentActivity() {
         prefsWorker = prefs.getString("worker", "https://REPLACE.workers.dev") ?: prefsWorker
         prefsName = prefs.getString("name", "") ?: ""
         selectedChannel = prefs.getString("room", null)
+        recents = prefs.getString("recentRooms", "").orEmpty()
+            .split("\n").map { it.trim() }.filter { it.isNotEmpty() }.take(8)
         lanPeerIp = prefs.getString("lanPeer", "") ?: ""
         lanName = prefs.getString("lanName", android.os.Build.MODEL ?: "Android") ?: ""
-        ownIp = detectOwnIp()
+        volPtt = prefs.getBoolean("volPtt", true)
+        presetsText = prefs.getString(
+            "quickTexts", "OK\nOn my way\nLoud and clear\nStand by\nYes\nNo"
+        ) ?: ""
+        ownIp = LanDiscovery.detectOwnIp()
 
         volumeControlStream = AudioManager.STREAM_MUSIC
 
@@ -86,9 +83,55 @@ class LiveKitActivity : ComponentActivity() {
             requestPermissions(arrayOf(Manifest.permission.RECORD_AUDIO), 1002)
         }
 
+        startForegroundService(
+            TelemetryService.cmd(this, TelemetryService.ACTION_START)
+                .putExtra("name", lanName)
+        )
+
+        // Cache rosters for Home cards.
+        lifecycleScope.launch {
+            SessionState.cloudPeers.collect { list ->
+                selectedChannel?.let { rosterCache[it] = list }
+            }
+        }
+
         setContent {
             LanPttTheme(darkTheme = true) {
                 val nearby by LanDiscovery.peers.collectAsState()
+                val peers by SessionState.cloudPeers.collectAsState()
+                val speakingIds by SessionState.cloudSpeakers.collectAsState()
+                val connected by SessionState.cloudConnected.collectAsState()
+                val talking by SessionState.cloudTalking.collectAsState()
+                val cloudError by SessionState.cloudError.collectAsState()
+                val generation by SessionState.cloudGeneration.collectAsState()
+                val quality by SessionState.cloudQuality.collectAsState()
+                val texts by SessionState.cloudTexts.collectAsState()
+
+                // Join succeeded -> Active.
+                LaunchedEffect(connected) {
+                    if (connected && joining) {
+                        joining = false
+                        joinError = null
+                        selectedChannel?.let { pushRecent(it) }
+                        screen = Screen.Active
+                    }
+                }
+                // Surface service errors on Join.
+                LaunchedEffect(cloudError) {
+                    cloudError?.let {
+                        joinError = it
+                        joining = false
+                    }
+                }
+                // Hard disconnect while active -> Home.
+                LaunchedEffect(generation) {
+                    if (generation > 0 && screen == Screen.Active && !connected) {
+                        liveMode = false
+                        joinError = "Disconnected."
+                        screen = Screen.Home
+                    }
+                }
+
                 when (screen) {
                     Screen.Home -> {
                         val channels = DefaultChannels.map { def ->
@@ -101,14 +144,31 @@ class LiveKitActivity : ComponentActivity() {
                         }
                         HomeScreen(
                             channels = channels,
+                            recents = recentChannels(),
+                            freeWord = freeWord,
+                            onFreeWord = { freeWord = it },
+                            onJoinWord = {
+                                val word = freeWord.trim()
+                                if (!roomWordRe.matches(word)) {
+                                    joinError = "Room: letters, numbers, space, _ or -, max 64 chars."
+                                    freeWord = ""
+                                    freeRoom = ""
+                                    screen = Screen.Join
+                                } else {
+                                    selectedChannel = word
+                                    freeWord = ""
+                                    freeRoom = ""
+                                    joinError = null
+                                    screen = Screen.Join
+                                }
+                            },
                             mode = homeMode,
                             onMode = { homeMode = it },
                             ownIp = ownIp,
                             peerIp = lanPeerIp,
                             onPeerIp = {
                                 lanPeerIp = it
-                                getSharedPreferences("lk", MODE_PRIVATE).edit()
-                                    .putString("lanPeer", it).apply()
+                                prefs.edit().putString("lanPeer", it).apply()
                             },
                             onOpenLanTalk = {
                                 startActivity(
@@ -119,21 +179,22 @@ class LiveKitActivity : ComponentActivity() {
                             lanName = lanName,
                             onLanName = {
                                 lanName = it
-                                getSharedPreferences("lk", MODE_PRIVATE).edit()
-                                    .putString("lanName", it).apply()
-                                // Re-beacon under the new name.
-                                LanDiscovery.stop()
-                                LanDiscovery.start(it.ifBlank { android.os.Build.MODEL ?: "Android" })
+                                prefs.edit().putString("lanName", it).apply()
+                                startService(
+                                    TelemetryService.cmd(this, TelemetryService.ACTION_SET_NAME)
+                                        .putExtra("name", it)
+                                )
                             },
                             nearby = nearby.values.sortedBy { it.name.lowercase() },
                             onPickPeer = {
                                 lanPeerIp = it
-                                getSharedPreferences("lk", MODE_PRIVATE).edit()
-                                    .putString("lanPeer", it).apply()
+                                prefs.edit().putString("lanPeer", it).apply()
                             },
                             onJoin = { screen = Screen.Join },
                             onTapChannel = { ch ->
-                                if (connected) leave()
+                                if (connected) {
+                                    startService(TelemetryService.cmd(this, TelemetryService.ACTION_CLOUD_LEAVE))
+                                }
                                 selectedChannel = ch.id
                                 joinError = null
                                 screen = Screen.Join
@@ -144,39 +205,66 @@ class LiveKitActivity : ComponentActivity() {
                         JoinScreen(
                             name = prefsName,
                             onName = { prefsName = it },
-                            channels = DefaultChannels.map { def ->
+                            channels = (DefaultChannels.map { def ->
                                 TalkChannel(
                                     id = def.id,
                                     name = def.name,
                                     knownPeers = rosterCache[def.id] ?: emptyList(),
                                     live = (rosterCache[def.id]?.size ?: 0) > 1
                                 )
-                            },
+                            } + recentChannels()).distinctBy { it.id },
                             selectedId = selectedChannel,
-                            onSelect = { selectedChannel = it },
+                            onSelect = { selectedChannel = it; freeRoom = "" },
+                            freeRoom = freeRoom,
+                            onFreeRoom = { freeRoom = it },
+                            volPtt = volPtt,
+                            onVolPtt = {
+                                volPtt = it
+                                prefs.edit().putBoolean("volPtt", it).apply()
+                            },
+                            presetsText = presetsText,
+                            onPresetsText = {
+                                presetsText = it
+                                prefs.edit().putString("quickTexts", it).apply()
+                            },
                             url = prefsUrl,
                             onUrl = { prefsUrl = it },
                             worker = prefsWorker,
                             onWorker = { prefsWorker = it },
                             serverOpen = serverOpen,
                             onToggleServer = { serverOpen = !serverOpen },
-                            error = joinError,
+                            error = joinError ?: if (joining) "Getting token..." else null,
                             onJoin = { join() },
                             onBack = { screen = Screen.Home }
                         )
                     }
                     Screen.Active -> {
                         val chId = selectedChannel
-                        val speaker = peers.firstOrNull { isSpeaking(it) }
+                        val isSpeaking: (ChatPeer) -> Boolean = {
+                            if (it.id == "me") talking else speakingIds.contains(it.id)
+                        }
+                        val speaker = peers.firstOrNull(isSpeaking)
                         ActiveScreen(
                             channelName = DefaultChannels.firstOrNull { it.id == chId }?.name
                                 ?: chId ?: "Channel",
                             peers = peers,
-                            isSpeaking = ::isSpeaking,
+                            isSpeaking = isSpeaking,
                             speaker = speaker,
                             transmitting = talking,
+                            liveMode = liveMode,
+                            onToggleLive = {
+                                liveMode = it
+                                setMicTalking(it)
+                            },
+                            qualityDot = { p ->
+                                com.example.lanptt.ui.talknet.qualityColor(quality[p.id])
+                            },
+                            presets = parsePresets(presetsText),
+                            onSendText = { sendText(it) },
+                            texts = texts,
                             onBack = {
-                                leave()
+                                liveMode = false
+                                startService(TelemetryService.cmd(this, TelemetryService.ACTION_CLOUD_LEAVE))
                                 screen = Screen.Home
                             },
                             onDown = { setMicTalking(true) },
@@ -188,18 +276,51 @@ class LiveKitActivity : ComponentActivity() {
         }
     }
 
-    private fun isSpeaking(p: ChatPeer): Boolean =
-        if (p.id == "me") talking else speakingIds.contains(p.id)
+    private val roomWordRe = Regex("^[a-zA-Z0-9 _-]{1,64}$")
+
+    private fun saveRecents(list: List<String>) {
+        recents = list
+        getSharedPreferences("lk", MODE_PRIVATE).edit()
+            .putString("recentRooms", list.joinToString("\n")).apply()
+    }
+
+    private fun pushRecent(room: String) {
+        saveRecents((listOf(room) + recents.filter { it != room }).take(8))
+    }
+
+    private fun recentChannels(): List<TalkChannel> =
+        recents.map { id ->
+            TalkChannel(
+                id = id,
+                name = DefaultChannels.firstOrNull { it.id == id }?.name ?: id,
+                knownPeers = rosterCache[id] ?: emptyList(),
+                live = (rosterCache[id]?.size ?: 0) > 1
+            )
+        }
 
     override fun onResume() {
         super.onResume()
-        ownIp = detectOwnIp()
-        LanDiscovery.start(lanName.ifBlank { android.os.Build.MODEL ?: "Android" })
+        ownIp = LanDiscovery.detectOwnIp()
     }
 
-    override fun onPause() {
-        LanDiscovery.stop()
-        super.onPause()
+    override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
+        if (keyCode == KeyEvent.KEYCODE_VOLUME_DOWN && volPtt &&
+            screen == Screen.Active && SessionState.cloudConnected.value
+        ) {
+            setMicTalking(true)
+            return true
+        }
+        return super.onKeyDown(keyCode, event)
+    }
+
+    override fun onKeyUp(keyCode: Int, event: KeyEvent?): Boolean {
+        if (keyCode == KeyEvent.KEYCODE_VOLUME_DOWN && volPtt &&
+            screen == Screen.Active && SessionState.cloudConnected.value
+        ) {
+            if (!liveMode) setMicTalking(false)
+            return true
+        }
+        return super.onKeyUp(keyCode, event)
     }
 
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<String>, grantResults: IntArray) {
@@ -209,36 +330,15 @@ class LiveKitActivity : ComponentActivity() {
         }
     }
 
-    private fun setPeerList() {
-        val r = room
-        if (r == null) {
-            peers = emptyList()
-            return
-        }
-        val list = mutableListOf(MePeer)
-        r.remoteParticipants.values.forEach { p ->
-            val idStr = p.identity?.value ?: return@forEach
-            val display = p.name?.takeIf { n -> n.isNotEmpty() } ?: idStr
-            list += ChatPeer(
-                id = idStr,
-                name = display,
-                initials = initialsFor(display),
-                color = peerColorFor(idStr)
-            )
-        }
-        peers = list
-        selectedChannel?.let { rosterCache[it] = list }
-    }
-
     private fun join() {
-        if (connected) return
+        if (SessionState.cloudConnected.value || joining) return
         if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
             requestPermissions(arrayOf(Manifest.permission.RECORD_AUDIO), 1002)
             return
         }
         val url = prefsUrl.trim()
         val worker = prefsWorker.trim().trimEnd('/')
-        val roomName = selectedChannel?.trim().orEmpty()
+        val roomName = freeRoom.trim().ifEmpty { selectedChannel?.trim().orEmpty() }
         val name = prefsName.trim()
         if (url.contains("REPLACE") || worker.contains("REPLACE")) {
             joinError = "Paste your LiveKit URL + worker URL first (see token-server/README)."
@@ -248,115 +348,43 @@ class LiveKitActivity : ComponentActivity() {
             joinError = "Name + channel are required."
             return
         }
+        if (!roomWordRe.matches(roomName)) {
+            joinError = "Room: letters, numbers, space, _ or -, max 64 chars."
+            return
+        }
+        selectedChannel = roomName
+        freeRoom = ""
         getSharedPreferences("lk", MODE_PRIVATE).edit()
             .putString("url", url).putString("worker", worker)
             .putString("room", roomName).putString("name", name).apply()
 
+        joining = true
         joinError = null
-        lifecycleScope.launch(Dispatchers.IO) {
-            try {
-                val (token, serverUrl) = fetchToken(worker, roomName, name)
-                val cleanEntered = normalizeLiveKitUrl(url)
-                val cleanServer = serverUrl?.let { normalizeLiveKitUrl(it) }
-                val finalUrl = cleanServer ?: cleanEntered
-                myIdentity = name
-                val r = LiveKit.create(applicationContext)
-                room = r
-                launch { observeEvents(r) }
-                r.connect(finalUrl, token)
-                // Start muted: this is push-to-talk, not an open mic.
-                r.localParticipant?.setMicrophoneEnabled(false)
-                connected = true
-                withContext(Dispatchers.Main) { screen = Screen.Active }
-                setPeerList()
-            } catch (e: Exception) {
-                joinError = "Join failed: ${e.message}"
-            }
-        }
-    }
-
-    private suspend fun observeEvents(r: Room) {
-        r.events.events.collect { event ->
-            when (event) {
-                is RoomEvent.ParticipantConnected,
-                is RoomEvent.ParticipantDisconnected -> setPeerList()
-                is RoomEvent.ActiveSpeakersChanged -> {
-                    speakingIds = event.speakers
-                        .mapNotNull { sp ->
-                            val id = sp.identity?.value ?: return@mapNotNull null
-                            if (id == myIdentity) "me" else id
-                        }
-                        .filter { id -> id == "me" || peers.any { it.id == id } }
-                        .toSet()
-                }
-                is RoomEvent.Disconnected -> {
-                    connected = false
-                    talking = false
-                    speakingIds = emptySet()
-                    room = null
-                    peers = emptyList()
-                    joinError = "Disconnected."
-                    screen = Screen.Home
-                }
-                else -> {}
-            }
-        }
+        startForegroundService(
+            TelemetryService.cmd(this, TelemetryService.ACTION_CLOUD_JOIN)
+                .putExtra("url", url)
+                .putExtra("worker", worker)
+                .putExtra("room", roomName)
+                .putExtra("name", name)
+        )
     }
 
     private fun setMicTalking(wantTalking: Boolean) {
-        val r = room
-        if (!connected || r == null) return
-        lifecycleScope.launch {
-            try {
-                r.localParticipant?.setMicrophoneEnabled(wantTalking)
-                talking = wantTalking
-            } catch (e: Exception) {
-                joinError = "Mic error: ${e.message}"
-            }
-        }
+        if (!SessionState.cloudConnected.value) return
+        startService(
+            TelemetryService.cmd(this, TelemetryService.ACTION_CLOUD_TALK)
+                .putExtra("talk", wantTalking)
+        )
     }
 
-    private fun leave() {
-        if (!connected && room == null) return
-        connected = false
-        talking = false
-        speakingIds = emptySet()
-        lifecycleScope.launch {
-            try { room?.disconnect() } catch (_: Exception) {}
-            room = null
-            peers = emptyList()
-        }
+    private fun sendText(text: String) {
+        if (!SessionState.cloudConnected.value) return
+        startService(
+            TelemetryService.cmd(this, TelemetryService.ACTION_CLOUD_TEXT)
+                .putExtra("text", text)
+        )
     }
 
-    private fun detectOwnIp(): String = LanDiscovery.detectOwnIp()
-
-    private fun normalizeLiveKitUrl(raw: String): String {        var u = raw.trim().trimEnd('/')
-        if (u.startsWith("https://")) u = "wss://" + u.removePrefix("https://")
-        if (u.startsWith("http://")) u = "ws://" + u.removePrefix("http://")
-        return u
-    }
-
-    private fun fetchToken(worker: String, roomName: String, name: String): Pair<String, String?> {
-        val conn = (URL("$worker/token").openConnection() as HttpURLConnection).apply {
-            requestMethod = "POST"
-            setRequestProperty("Content-Type", "application/json")
-            connectTimeout = 15000
-            readTimeout = 15000
-            doOutput = true
-        }
-        val body = JSONObject().put("room", roomName).put("identity", name).toString()
-        conn.outputStream.use { it.write(body.toByteArray()) }
-        if (conn.responseCode != 200) throw Exception("token server HTTP ${conn.responseCode}")
-        val resp = conn.inputStream.bufferedReader().readText()
-        val json = JSONObject(resp)
-        val url = if (json.has("url")) json.optString("url").takeIf { it.isNotEmpty() } else null
-        return JSONObject(resp).getString("token") to url
-    }
-
-    override fun onDestroy() {
-        lifecycleScope.launch {
-            try { room?.disconnect() } catch (_: Exception) {}
-        }
-        super.onDestroy()
-    }
+    private fun parsePresets(raw: String): List<String> =
+        raw.split("\n").map { it.trim() }.filter { it.isNotEmpty() }.take(8)
 }
