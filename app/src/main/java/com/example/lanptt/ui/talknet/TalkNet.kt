@@ -66,6 +66,8 @@ private val PeerPalette = listOf(
 fun peerColorFor(identity: String): Color =
     PeerPalette[abs(identity.hashCode()) % PeerPalette.size]
 
+fun peerColorForName(name: String): Color = peerColorFor(name)
+
 fun initialsFor(name: String): String {
     val parts = name.trim().split(Regex("\\s+")).filter { it.isNotEmpty() }
     if (parts.isEmpty()) return "?"

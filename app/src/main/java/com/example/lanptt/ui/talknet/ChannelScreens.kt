@@ -91,9 +91,21 @@ fun RadioIcon(active: Boolean, modifier: Modifier = Modifier) {
 
 /* ─── HOME ─────────────────────────────────────────────── */
 
+enum class HomeMode { LAN, CLOUD }
+
 @Composable
 fun HomeScreen(
     channels: List<TalkChannel>,
+    mode: HomeMode,
+    onMode: (HomeMode) -> Unit,
+    ownIp: String,
+    peerIp: String,
+    onPeerIp: (String) -> Unit,
+    onOpenLanTalk: () -> Unit,
+    lanName: String,
+    onLanName: (String) -> Unit,
+    nearby: List<com.example.lanptt.lan.LanPeer>,
+    onPickPeer: (String) -> Unit,
     onJoin: () -> Unit,
     onTapChannel: (TalkChannel) -> Unit,
     modifier: Modifier = Modifier
@@ -111,10 +123,10 @@ fun HomeScreen(
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Column {
-                MonoLabel("TALKNET", color = TalkMint, fontSize = 12)
-                Text("Channels", color = TalkText, fontSize = 20.sp, fontWeight = FontWeight.Bold)
-            }
+                Column {
+                    MonoLabel("TELEMETRY", color = TalkMint, fontSize = 12)
+                    Text("Channels", color = TalkText, fontSize = 20.sp, fontWeight = FontWeight.Bold)
+                }
             Button(
                 onClick = onJoin,
                 shape = CircleShape,
@@ -123,66 +135,213 @@ fun HomeScreen(
                 Text("+ Join", fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
             }
         }
+        // LAN / CLOUD toggle.
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 20.dp)
+                .clip(RoundedCornerShape(12.dp))
+                .background(TalkCard)
+                .border(1.dp, TalkBorder, RoundedCornerShape(12.dp))
+                .padding(4.dp),
+            horizontalArrangement = Arrangement.spacedBy(4.dp)
+        ) {
+            HomeMode.entries.forEach { m ->
+                val sel = mode == m
+                Box(
+                    contentAlignment = Alignment.Center,
+                    modifier = Modifier
+                        .weight(1f)
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(if (sel) TalkMint else TalkCard)
+                        .clickable { onMode(m) }
+                        .padding(vertical = 8.dp)
+                ) {
+                    Text(
+                        m.name,
+                        color = if (sel) TalkBg else TalkTextDim,
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        letterSpacing = 1.sp
+                    )
+                }
+            }
+        }
+        Spacer(Modifier.height(12.dp))
         Box(
             Modifier
                 .fillMaxWidth()
                 .height(1.dp)
                 .background(TalkBorder)
         )
-        LazyColumn(
-            modifier = Modifier
-                .weight(1f)
-                .padding(horizontal = 16.dp, vertical = 12.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            items(channels, key = { it.id }) { ch ->
-                Row(
+        if (mode == HomeMode.CLOUD) {
+            LazyColumn(
+                modifier = Modifier
+                    .weight(1f)
+                    .padding(horizontal = 16.dp, vertical = 12.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                items(channels, key = { it.id }) { ch ->
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(16.dp))
+                            .background(TalkCard)
+                            .border(1.dp, TalkBorder, RoundedCornerShape(16.dp))
+                            .clickable { onTapChannel(ch) }
+                            .padding(16.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(40.dp)
+                                .background(TalkCard2, RoundedCornerShape(12.dp))
+                                .border(1.dp, TalkBorder, RoundedCornerShape(12.dp)),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            RadioIcon(active = ch.live)
+                        }
+                        Spacer(Modifier.width(16.dp))
+                        Column(modifier = Modifier.weight(1f)) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(ch.name, color = TalkText, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+                                if (ch.live) {
+                                    Spacer(Modifier.width(8.dp))
+                                    PulsingDot()
+                                }
+                            }
+                            Spacer(Modifier.height(4.dp))
+                            Row {
+                                MonoLabel(
+                                    if (ch.knownPeers.isEmpty()) "Tap to join"
+                                    else "${ch.knownPeers.size} online",
+                                    color = TalkTextDim
+                                )
+                                if (ch.live) {
+                                    MonoLabel("  · live", color = TalkMint)
+                                }
+                            }
+                        }
+                        Column(
+                            horizontalAlignment = Alignment.End,
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            if (ch.knownPeers.isNotEmpty()) AvatarStack(ch.knownPeers)
+                            if (ch.live) WaveformBars(active = true)
+                        }
+                    }
+                }
+            }
+        } else {
+            // LAN tab: direct-dial card (peer discovery lands here next).
+            Column(
+                modifier = Modifier
+                    .weight(1f)
+                    .padding(horizontal = 16.dp, vertical = 12.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Column(
                     modifier = Modifier
                         .fillMaxWidth()
                         .clip(RoundedCornerShape(16.dp))
                         .background(TalkCard)
                         .border(1.dp, TalkBorder, RoundedCornerShape(16.dp))
-                        .clickable { onTapChannel(ch) }
-                        .padding(16.dp),
-                    verticalAlignment = Alignment.CenterVertically
+                        .padding(16.dp)
                 ) {
-                    Box(
-                        modifier = Modifier
-                            .size(40.dp)
-                            .background(TalkCard2, RoundedCornerShape(12.dp))
-                            .border(1.dp, TalkBorder, RoundedCornerShape(12.dp)),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        RadioIcon(active = ch.live)
-                    }
-                    Spacer(Modifier.width(16.dp))
-                    Column(modifier = Modifier.weight(1f)) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text(ch.name, color = TalkText, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
-                            if (ch.live) {
-                                Spacer(Modifier.width(8.dp))
-                                PulsingDot()
+                    MonoLabel("LAN DIRECT")
+                    Spacer(Modifier.height(4.dp))
+                    MonoLabel("My IP: $ownIp", color = TalkTextDim)
+                    Spacer(Modifier.height(12.dp))
+                    MonoLabel("YOUR NAME")
+                    Spacer(Modifier.height(8.dp))
+                    OutlinedTextField(
+                        value = lanName,
+                        onValueChange = onLanName,
+                        placeholder = { Text("e.g. Alex", color = TalkMuted) },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    Spacer(Modifier.height(12.dp))
+                    MonoLabel("NEARBY (${nearby.size})")
+                    Spacer(Modifier.height(8.dp))
+                    if (nearby.isEmpty()) {
+                        MonoLabel("No peers yet — same WiFi, app open.", color = TalkMuted)
+                    } else {
+                        val dupes = nearby.groupBy { it.name }.filterValues { it.size > 1 }.keys
+                        nearby.forEach { peer ->
+                            val label = if (peer.name in dupes) {
+                                val oct = peer.ip.substringAfterLast('.', peer.ip)
+                                "${peer.name} • $oct"
+                            } else peer.name
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(12.dp))
+                                    .background(
+                                        if (peerIp == peer.ip) TalkMint.copy(alpha = 0.12f)
+                                        else TalkCard2
+                                    )
+                                    .border(
+                                        1.dp,
+                                        if (peerIp == peer.ip) TalkMint else TalkBorder,
+                                        RoundedCornerShape(12.dp)
+                                    )
+                                    .clickable { onPickPeer(peer.ip) }
+                                    .padding(12.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Avatar(
+                                    peer = ChatPeer(
+                                        peer.ip, peer.name,
+                                        peer.name.split(" ").let {
+                                            if (it.size == 1) it[0].take(2).uppercase()
+                                            else (it[0].take(1) + it[1].take(1)).uppercase()
+                                        },
+                                        peerColorForName(peer.name)
+                                    ),
+                                    size = 36.dp
+                                )
+                                Spacer(Modifier.width(12.dp))
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(label, color = TalkText, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+                                    MonoLabel(peer.ip, color = TalkTextDim)
+                                }
+                                if (peerIp == peer.ip) PulsingDot()
                             }
-                        }
-                        Spacer(Modifier.height(4.dp))
-                        Row {
-                            MonoLabel(
-                                if (ch.knownPeers.isEmpty()) "Tap to join"
-                                else "${ch.knownPeers.size} online",
-                                color = TalkTextDim
-                            )
-                            if (ch.live) {
-                                MonoLabel("  · live", color = TalkMint)
-                            }
+                            Spacer(Modifier.height(8.dp))
                         }
                     }
-                    Column(
-                        horizontalAlignment = Alignment.End,
-                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    Spacer(Modifier.height(4.dp))
+                    MonoLabel("PEER IP (MANUAL FALLBACK)")
+                    Spacer(Modifier.height(8.dp))
+                    OutlinedTextField(
+                        value = peerIp,
+                        onValueChange = onPeerIp,
+                        placeholder = { Text("e.g. 192.168.1.42", color = TalkMuted) },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    Spacer(Modifier.height(12.dp))
+                    Button(
+                        onClick = onOpenLanTalk,
+                        enabled = peerIp.isNotBlank(),
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(16.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = TalkMint,
+                            contentColor = TalkBg,
+                            disabledContainerColor = TalkCard2,
+                            disabledContentColor = TalkMuted
+                        )
                     ) {
-                        if (ch.knownPeers.isNotEmpty()) AvatarStack(ch.knownPeers)
-                        if (ch.live) WaveformBars(active = true)
+                        Text(
+                            "OPEN LAN TALK",
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier.padding(vertical = 8.dp)
+                        )
                     }
+                    Spacer(Modifier.height(8.dp))
+                    MonoLabel("Tap a peer or type an IP below.")
                 }
             }
         }
@@ -193,7 +352,7 @@ fun HomeScreen(
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            MonoLabel("Cloud · Connected", color = TalkMuted)
+            MonoLabel(if (mode == HomeMode.CLOUD) "Cloud · Connected" else "LAN · Direct", color = TalkMuted)
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Box(Modifier.size(6.dp).background(TalkMint, CircleShape))
                 Spacer(Modifier.width(6.dp))
@@ -521,6 +680,18 @@ fun HomePreview() {
                 TalkChannel("office", "Office", MockPeers.drop(1), live = true),
                 TalkChannel("warehouse", "Warehouse")
             ),
+            mode = HomeMode.CLOUD,
+            onMode = {},
+            ownIp = "192.168.1.10",
+            peerIp = "",
+            onPeerIp = {},
+            onOpenLanTalk = {},
+            lanName = "Alex",
+            onLanName = {},
+            nearby = listOf(
+                com.example.lanptt.lan.LanPeer("Ben", "192.168.1.42", 0L)
+            ),
+            onPickPeer = {},
             onJoin = {}, onTapChannel = {}
         )
     }

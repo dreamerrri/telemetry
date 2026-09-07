@@ -1,19 +1,23 @@
 package com.example.lanptt
 
 import android.Manifest
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.media.AudioManager
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.lifecycleScope
+import com.example.lanptt.lan.LanDiscovery
 import com.example.lanptt.ui.talknet.ActiveScreen
 import com.example.lanptt.ui.talknet.ChatPeer
 import com.example.lanptt.ui.talknet.DefaultChannels
+import com.example.lanptt.ui.talknet.HomeMode
 import com.example.lanptt.ui.talknet.HomeScreen
 import com.example.lanptt.ui.talknet.JoinScreen
 import com.example.lanptt.ui.talknet.MePeer
@@ -42,6 +46,10 @@ class LiveKitActivity : ComponentActivity() {
     private enum class Screen { Home, Join, Active }
 
     private var screen by mutableStateOf(Screen.Home)
+    private var homeMode by mutableStateOf(HomeMode.CLOUD)
+    private var ownIp by mutableStateOf("...")
+    private var lanPeerIp by mutableStateOf("")
+    private var lanName by mutableStateOf("")
     private var prefsUrl by mutableStateOf("wss://REPLACE.livekit.cloud")
     private var prefsWorker by mutableStateOf("https://REPLACE.workers.dev")
     private var prefsName by mutableStateOf("")
@@ -68,6 +76,9 @@ class LiveKitActivity : ComponentActivity() {
         prefsWorker = prefs.getString("worker", "https://REPLACE.workers.dev") ?: prefsWorker
         prefsName = prefs.getString("name", "") ?: ""
         selectedChannel = prefs.getString("room", null)
+        lanPeerIp = prefs.getString("lanPeer", "") ?: ""
+        lanName = prefs.getString("lanName", android.os.Build.MODEL ?: "Android") ?: ""
+        ownIp = detectOwnIp()
 
         volumeControlStream = AudioManager.STREAM_MUSIC
 
@@ -77,6 +88,7 @@ class LiveKitActivity : ComponentActivity() {
 
         setContent {
             LanPttTheme(darkTheme = true) {
+                val nearby by LanDiscovery.peers.collectAsState()
                 when (screen) {
                     Screen.Home -> {
                         val channels = DefaultChannels.map { def ->
@@ -89,6 +101,36 @@ class LiveKitActivity : ComponentActivity() {
                         }
                         HomeScreen(
                             channels = channels,
+                            mode = homeMode,
+                            onMode = { homeMode = it },
+                            ownIp = ownIp,
+                            peerIp = lanPeerIp,
+                            onPeerIp = {
+                                lanPeerIp = it
+                                getSharedPreferences("lk", MODE_PRIVATE).edit()
+                                    .putString("lanPeer", it).apply()
+                            },
+                            onOpenLanTalk = {
+                                startActivity(
+                                    Intent(this, MainActivity::class.java)
+                                        .putExtra("peerIp", lanPeerIp.trim())
+                                )
+                            },
+                            lanName = lanName,
+                            onLanName = {
+                                lanName = it
+                                getSharedPreferences("lk", MODE_PRIVATE).edit()
+                                    .putString("lanName", it).apply()
+                                // Re-beacon under the new name.
+                                LanDiscovery.stop()
+                                LanDiscovery.start(it.ifBlank { android.os.Build.MODEL ?: "Android" })
+                            },
+                            nearby = nearby.values.sortedBy { it.name.lowercase() },
+                            onPickPeer = {
+                                lanPeerIp = it
+                                getSharedPreferences("lk", MODE_PRIVATE).edit()
+                                    .putString("lanPeer", it).apply()
+                            },
                             onJoin = { screen = Screen.Join },
                             onTapChannel = { ch ->
                                 if (connected) leave()
@@ -148,6 +190,16 @@ class LiveKitActivity : ComponentActivity() {
 
     private fun isSpeaking(p: ChatPeer): Boolean =
         if (p.id == "me") talking else speakingIds.contains(p.id)
+
+    override fun onResume() {
+        super.onResume()
+        LanDiscovery.start(lanName.ifBlank { android.os.Build.MODEL ?: "Android" })
+    }
+
+    override fun onPause() {
+        LanDiscovery.stop()
+        super.onPause()
+    }
 
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<String>, grantResults: IntArray) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
@@ -275,8 +327,23 @@ class LiveKitActivity : ComponentActivity() {
         }
     }
 
-    private fun normalizeLiveKitUrl(raw: String): String {
-        var u = raw.trim().trimEnd('/')
+    private fun detectOwnIp(): String {
+        try {
+            val interfaces = java.net.NetworkInterface.getNetworkInterfaces()
+            for (nic in interfaces) {
+                if (!nic.isUp || nic.isLoopback) continue
+                for (addr in nic.inetAddresses) {
+                    if (addr.isLoopbackAddress) continue
+                    if (addr is java.net.Inet4Address) {
+                        return addr.hostAddress ?: "?"
+                    }
+                }
+            }
+        } catch (_: Exception) { }
+        return "?"
+    }
+
+    private fun normalizeLiveKitUrl(raw: String): String {        var u = raw.trim().trimEnd('/')
         if (u.startsWith("https://")) u = "wss://" + u.removePrefix("https://")
         if (u.startsWith("http://")) u = "ws://" + u.removePrefix("http://")
         return u

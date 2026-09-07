@@ -13,6 +13,8 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -23,27 +25,36 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.lanptt.lan.LanDiscovery
+import com.example.lanptt.lan.LanPeer
+import com.example.lanptt.ui.talknet.Avatar
+import com.example.lanptt.ui.talknet.ChatPeer
 import com.example.lanptt.ui.talknet.MonoLabel
 import com.example.lanptt.ui.talknet.RoundPttButton
+import com.example.lanptt.ui.talknet.peerColorForName
 import com.example.lanptt.ui.theme.LanPttTheme
 import com.example.lanptt.ui.theme.TalkBg
 import com.example.lanptt.ui.theme.TalkBorder
+import com.example.lanptt.ui.theme.TalkCard
 import com.example.lanptt.ui.theme.TalkMint
 import com.example.lanptt.ui.theme.TalkMuted
 import com.example.lanptt.ui.theme.TalkText
@@ -80,17 +91,32 @@ class MainActivity : ComponentActivity() {
         startReceiver()
 
         setContent {
-            LanPttTheme {
+            LanPttTheme(darkTheme = true) {
+                val nearby by LanDiscovery.peers.collectAsState()
                 LanScreen(
                     ownIp = ownIp,
                     status = status,
                     transmitting = transmitting,
+                    initialPeerIp = intent.getStringExtra("peerIp").orEmpty(),
+                    nearby = nearby.values.sortedBy { it.name.lowercase() },
                     onPeerTalk = { peerIp -> startTalking(peerIp) },
                     onStopTalk = { stopTalking() },
                     onOpenCloud = { startActivity(Intent(this, LiveKitActivity::class.java)) }
                 )
             }
         }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        val name = getSharedPreferences("lk", MODE_PRIVATE)
+            .getString("lanName", android.os.Build.MODEL ?: "Android") ?: "Android"
+        LanDiscovery.start(name)
+    }
+
+    override fun onPause() {
+        LanDiscovery.stop()
+        super.onPause()
     }
 
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<String>, grantResults: IntArray) {
@@ -251,9 +277,11 @@ fun LanScreen(
     transmitting: Boolean,
     onPeerTalk: (String) -> Unit,
     onStopTalk: () -> Unit,
-    onOpenCloud: () -> Unit
+    onOpenCloud: () -> Unit,
+    initialPeerIp: String = "",
+    nearby: List<LanPeer> = emptyList()
 ) {
-    var peerIp by rememberSaveable { mutableStateOf("") }
+    var peerIp by rememberSaveable(initialPeerIp) { mutableStateOf(initialPeerIp) }
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -268,7 +296,7 @@ fun LanScreen(
             verticalAlignment = Alignment.CenterVertically
         ) {
             Column {
-                MonoLabel("TALKNET", color = TalkMint, fontSize = 12)
+                MonoLabel("TELEMETRY", color = TalkMint, fontSize = 12)
                 Text("LAN Direct", color = TalkText, fontSize = 20.sp, fontWeight = FontWeight.Bold)
             }
             MonoLabel("My IP: $ownIp", color = TalkTextDim)
@@ -292,6 +320,51 @@ fun LanScreen(
         )
         Spacer(Modifier.height(8.dp))
         MonoLabel("Status: $status", color = TalkTextDim, modifier = Modifier.fillMaxWidth())
+        if (nearby.isNotEmpty()) {
+            Spacer(Modifier.height(12.dp))
+            MonoLabel("NEARBY (${nearby.size})", modifier = Modifier.fillMaxWidth())
+            Spacer(Modifier.height(8.dp))
+            val dupes = nearby.groupBy { it.name }.filterValues { it.size > 1 }.keys
+            nearby.forEach { peer ->
+                val label = if (peer.name in dupes) {
+                    "${peer.name} • ${peer.ip.substringAfterLast('.', peer.ip)}"
+                } else peer.name
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(
+                            if (peerIp == peer.ip) TalkMint.copy(alpha = 0.12f) else TalkCard
+                        )
+                        .border(
+                            1.dp,
+                            if (peerIp == peer.ip) TalkMint else TalkBorder,
+                            RoundedCornerShape(12.dp)
+                        )
+                        .clickable { peerIp = peer.ip }
+                        .padding(12.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Avatar(
+                        peer = ChatPeer(
+                            peer.ip, peer.name,
+                            peer.name.split(" ").let {
+                                if (it.size == 1) it[0].take(2).uppercase()
+                                else (it[0].take(1) + it[1].take(1)).uppercase()
+                            },
+                            peerColorForName(peer.name)
+                        ),
+                        size = 36.dp
+                    )
+                    Spacer(Modifier.width(12.dp))
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(label, color = TalkText, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+                        MonoLabel(peer.ip, color = TalkTextDim)
+                    }
+                }
+                Spacer(Modifier.height(8.dp))
+            }
+        }
         Spacer(Modifier.weight(1f))
         RoundPttButton(
             transmitting = transmitting,
