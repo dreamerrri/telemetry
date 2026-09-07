@@ -193,6 +193,7 @@ class LiveKitActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
+        ownIp = detectOwnIp()
         LanDiscovery.start(lanName.ifBlank { android.os.Build.MODEL ?: "Android" })
     }
 
@@ -327,21 +328,7 @@ class LiveKitActivity : ComponentActivity() {
         }
     }
 
-    private fun detectOwnIp(): String {
-        try {
-            val interfaces = java.net.NetworkInterface.getNetworkInterfaces()
-            for (nic in interfaces) {
-                if (!nic.isUp || nic.isLoopback) continue
-                for (addr in nic.inetAddresses) {
-                    if (addr.isLoopbackAddress) continue
-                    if (addr is java.net.Inet4Address) {
-                        return addr.hostAddress ?: "?"
-                    }
-                }
-            }
-        } catch (_: Exception) { }
-        return "?"
-    }
+    private fun detectOwnIp(): String = LanDiscovery.detectOwnIp()
 
     private fun normalizeLiveKitUrl(raw: String): String {        var u = raw.trim().trimEnd('/')
         if (u.startsWith("https://")) u = "wss://" + u.removePrefix("https://")

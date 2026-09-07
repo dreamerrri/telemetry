@@ -51,30 +51,88 @@ object LanDiscovery {
 
     fun sorted(): List<LanPeer> = _peers.value.values.sortedBy { it.name.lowercase() }
 
+    /** Last own-IP seen by the beacon loop; used to flush stale peers on network switch. */
+    @Volatile var lastOwnIp: String = ""
+        private set
+
+    private fun scoreIface(name: String): Int = when {
+        // Hotspot hosting / tether interfaces first.
+        name.startsWith("ap") || name.startsWith("rndis") || name.startsWith("ncm") -> 0
+        // Regular WiFi / ethernet next.
+        name.startsWith("wlan") || name.startsWith("eth") || name.startsWith("p2p") -> 1
+        // Mobile data last — never prefer these.
+        name.startsWith("rmnet") || name.startsWith("ccmni")
+            || name.startsWith("qmap") || name.startsWith("dummy") -> 99
+        else -> 50
+    }
+
+    /** Best own IPv4, preferring hotspot/WiFi interfaces over mobile data. */
     fun detectOwnIp(): String {
         try {
+            var fallback: String? = null
+            var bestScore = 100
             val ifs = java.net.NetworkInterface.getNetworkInterfaces()
             for (nic in ifs) {
                 if (!nic.isUp || nic.isLoopback) continue
                 for (addr in nic.inetAddresses) {
                     if (addr.isLoopbackAddress) continue
-                    if (addr is Inet4Address) return addr.hostAddress ?: "?"
+                    if (addr !is Inet4Address) continue
+                    val ip = addr.hostAddress ?: continue
+                    val score = scoreIface(nic.name)
+                    if (score < bestScore) {
+                        bestScore = score
+                        fallback = ip
+                        if (score == 0) return ip
+                    }
+                }
+            }
+            if (fallback != null) return fallback
+        } catch (_: Exception) { }
+        return "?"
+    }
+
+    /** Broadcast address per eligible interface (for multi-homed phones). */
+    private fun broadcastAddrs(): List<InetAddress> {
+        val out = mutableListOf<InetAddress>()
+        try {
+            val ifs = java.net.NetworkInterface.getNetworkInterfaces()
+            for (nic in ifs) {
+                if (!nic.isUp || nic.isLoopback) continue
+                if (scoreIface(nic.name) >= 99) continue
+                for (ia in nic.interfaceAddresses) {
+                    val b = ia.broadcast ?: continue
+                    if (b is Inet4Address && b !in out) out += b
                 }
             }
         } catch (_: Exception) { }
-        return "?"
+        if (out.isEmpty()) {
+            try {
+                out += InetAddress.getByName("255.255.255.255")
+            } catch (_: Exception) { }
+        }
+        return out
     }
 
     private fun beaconLoop(name: String) {
         try {
             val sock = DatagramSocket().apply { broadcast = true }
             beaconSock = sock
-            val dest = InetAddress.getByName("255.255.255.255")
+            lastOwnIp = detectOwnIp()
             val payload = (PREFIX + name).toByteArray()
             while (running) {
                 try {
-                    sock.send(DatagramPacket(payload, payload.size, dest, PORT))
+                    for (dest in broadcastAddrs()) {
+                        try {
+                            sock.send(DatagramPacket(payload, payload.size, dest, PORT))
+                        } catch (_: Exception) { }
+                    }
                 } catch (_: Exception) { }
+                // Network switched (WiFi <-> hotspot): drop stale peers.
+                val nowOwn = detectOwnIp()
+                if (nowOwn != lastOwnIp) {
+                    lastOwnIp = nowOwn
+                    _peers.value = emptyMap()
+                }
                 prune()
                 try {
                     Thread.sleep(BEACON_MS)
@@ -95,14 +153,13 @@ object LanDiscovery {
             // Another instance already listens; shared flow still updates.
             return
         }
-        val own = detectOwnIp()
         val buf = ByteArray(256)
         while (running) {
             try {
                 val pkt = DatagramPacket(buf, buf.size)
                 sock.receive(pkt)
                 val ip = pkt.address?.hostAddress ?: continue
-                if (ip == own) continue
+                if (ip == detectOwnIp()) continue
                 val msg = String(pkt.data, 0, pkt.length, Charsets.UTF_8)
                 if (!msg.startsWith(PREFIX)) continue
                 val peerName = msg.removePrefix(PREFIX).trim().take(48).ifEmpty { continue }

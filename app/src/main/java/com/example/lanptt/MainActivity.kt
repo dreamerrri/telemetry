@@ -109,6 +109,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
+        ownIp = detectOwnIp()
         val name = getSharedPreferences("lk", MODE_PRIVATE)
             .getString("lanName", android.os.Build.MODEL ?: "Android") ?: "Android"
         LanDiscovery.start(name)
@@ -130,21 +131,7 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun detectOwnIp(): String {
-        try {
-            val interfaces = java.net.NetworkInterface.getNetworkInterfaces()
-            for (nic in interfaces) {
-                if (!nic.isUp || nic.isLoopback) continue
-                for (addr in nic.inetAddresses) {
-                    if (addr.isLoopbackAddress) continue
-                    if (addr is java.net.Inet4Address) {
-                        return addr.hostAddress ?: "?"
-                    }
-                }
-            }
-        } catch (_: Exception) { }
-        return "?"
-    }
+    private fun detectOwnIp(): String = LanDiscovery.detectOwnIp()
 
     private fun startReceiver() {
         if (receiving) return
