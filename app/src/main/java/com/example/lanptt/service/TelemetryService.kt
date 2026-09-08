@@ -7,10 +7,16 @@ import android.app.PendingIntent
 import android.app.Service
 import android.content.Intent
 import android.media.AudioAttributes
+import android.media.AudioFocusRequest
 import android.media.AudioFormat
+import android.media.AudioManager
 import android.media.AudioRecord
 import android.media.AudioTrack
 import android.media.MediaRecorder
+import android.media.audiofx.AcousticEchoCanceler
+import android.media.audiofx.AudioEffect
+import android.media.audiofx.AutomaticGainControl
+import android.media.audiofx.NoiseSuppressor
 import android.os.BatteryManager
 import android.os.IBinder
 import com.example.lanptt.LiveKitActivity
@@ -74,6 +80,10 @@ class TelemetryService : Service() {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
 
+    // Audio focus: held for the service's lifetime so other apps can't steal
+    // the speaker mid-talk (music resumes when the user hits Stop).
+    private var focusRequest: AudioFocusRequest? = null
+
     // LAN
     @Volatile private var receiving = false
     @Volatile private var lanTx = false
@@ -90,6 +100,7 @@ class TelemetryService : Service() {
         super.onCreate()
         createChannel()
         startForeground(NOTIF_ID, buildNotif())
+        holdAudioFocus()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -155,6 +166,7 @@ class TelemetryService : Service() {
     override fun onDestroy() {
         receiving = false
         lanTx = false
+        abandonAudioFocus()
         try { rxSocket?.close() } catch (_: Exception) {}
         LanDiscovery.stop()
         scope.launch {
@@ -169,6 +181,43 @@ class TelemetryService : Service() {
             getSystemService(BatteryManager::class.java)
                 .getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY)
         } catch (_: Exception) { -1 }
+    }
+
+    /* ─── Audio focus ──────────────────────────────────── */
+
+    private fun holdAudioFocus() {
+        if (focusRequest != null) return
+        val am = getSystemService(AudioManager::class.java) ?: return
+        val req = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN)
+            .setAudioAttributes(
+                AudioAttributes.Builder()
+                    .setUsage(AudioAttributes.USAGE_MEDIA)
+                    .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                    .build()
+            )
+            .setOnAudioFocusChangeListener { }
+            .build()
+        focusRequest = req
+        try { am.requestAudioFocus(req) } catch (_: Exception) { }
+    }
+
+    private fun abandonAudioFocus() {
+        val req = focusRequest ?: return
+        focusRequest = null
+        try {
+            getSystemService(AudioManager::class.java)?.abandonAudioFocusRequest(req)
+        } catch (_: Exception) { }
+    }
+
+    /** Blocking AudioTrack write; negative result = device-level error. */
+    private fun writePcm(track: AudioTrack, data: ByteArray, off: Int, len: Int): Boolean {
+        if (len <= 0) return true
+        val w = track.write(data, off, len)
+        if (w < 0) {
+            SessionState.lanStatus.value = "Playback error ($w)"
+            return false
+        }
+        return true
     }
 
     /* ─── LAN ──────────────────────────────────────────── */
@@ -200,6 +249,11 @@ class TelemetryService : Service() {
                     .setBufferSizeInBytes(minBuf * 4)
                     .setTransferMode(AudioTrack.MODE_STREAM)
                     .build()
+                if (track.state != AudioTrack.STATE_INITIALIZED) {
+                    track.release()
+                    SessionState.lanStatus.value = "Listen failed: audio output unavailable"
+                    return@Thread
+                }
                 track.play()
 
                 rxSocket = DatagramSocket(LAN_PORT).apply { broadcast = true }
@@ -218,14 +272,14 @@ class TelemetryService : Service() {
                             if (tagged != null) {
                                 val (room, offset) = tagged
                                 if (room == SessionState.lanRoom.value && room.isNotEmpty()) {
-                                    track.write(pkt.data, offset, pkt.length - offset)
+                                    writePcm(track, pkt.data, offset, pkt.length - offset)
                                     SessionState.lanStatus.value =
                                         "Room '$room' · ${pkt.address.hostAddress}..."
                                 }
                                 continue
                             }
                             // Legacy untagged: direct dial.
-                            track.write(pkt.data, 0, pkt.length)
+                            writePcm(track, pkt.data, 0, pkt.length)
                             SessionState.lanStatus.value =
                                 "Receiving ${pkt.length}B from ${pkt.address.hostAddress}..."
                         }
@@ -286,6 +340,7 @@ class TelemetryService : Service() {
         Thread({
             var rec: AudioRecord? = null
             var sock: DatagramSocket? = null
+            var fx: List<AudioEffect> = emptyList()
             try {
                 val minBuf = AudioRecord.getMinBufferSize(
                     SAMPLE_RATE,
@@ -299,6 +354,28 @@ class TelemetryService : Service() {
                     AudioFormat.ENCODING_PCM_16BIT,
                     minBuf * 2
                 )
+                // Voice processing: echo cancellation + noise suppression + AGC
+                // where the device supports them (speakerphone echo on LAN PTT).
+                val effects = ArrayList<AudioEffect>(3)
+                try {
+                    if (AcousticEchoCanceler.isAvailable()) {
+                        AcousticEchoCanceler.create(rec.audioSessionId)?.let { effects.add(it) }
+                    }
+                } catch (_: Exception) { }
+                try {
+                    if (NoiseSuppressor.isAvailable()) {
+                        NoiseSuppressor.create(rec.audioSessionId)?.let { effects.add(it) }
+                    }
+                } catch (_: Exception) { }
+                try {
+                    if (AutomaticGainControl.isAvailable()) {
+                        AutomaticGainControl.create(rec.audioSessionId)?.let { effects.add(it) }
+                    }
+                } catch (_: Exception) { }
+                for (e in effects) {
+                    try { e.enabled = true } catch (_: Exception) { }
+                }
+                fx = effects
                 sock = DatagramSocket().apply { broadcast = true }
                 rec.startRecording()
                 val buf = ByteArray(1024)
@@ -325,6 +402,7 @@ class TelemetryService : Service() {
                 try { rec?.stop() } catch (_: Exception) {}
                 try { rec?.release() } catch (_: Exception) {}
                 try { sock?.close() } catch (_: Exception) {}
+                fx.forEach { try { it.release() } catch (_: Exception) { } }
             }
         }, "ptt-tx").start()
     }
@@ -353,7 +431,7 @@ class TelemetryService : Service() {
             val clean = text.trim().take(280)
             if (clean.isEmpty()) return true
             SessionState.lanTexts.value =
-                (SessionState.lanTexts.value + TextMsg(from, clean, room = room)).takeLast(5)
+                (SessionState.lanTexts.value + TextMsg(from, clean, room = room)).takeLast(60)
             true
         } catch (_: Exception) {
             false
@@ -383,7 +461,7 @@ class TelemetryService : Service() {
                     }
                 }
                 SessionState.lanTexts.value =
-                    (SessionState.lanTexts.value + TextMsg("You", clean, room = room.trim())).takeLast(5)
+                    (SessionState.lanTexts.value + TextMsg("You", clean, room = room.trim())).takeLast(60)
             } catch (e: Exception) {
                 SessionState.lanStatus.value = "Text failed: ${e.message}"
             }
@@ -463,7 +541,7 @@ class TelemetryService : Service() {
                         val id = event.participant?.identity?.value ?: "?"
                         val sender = SessionState.cloudPeers.value.firstOrNull { it.id == id }?.name ?: id
                         SessionState.cloudTexts.value =
-                            (SessionState.cloudTexts.value + TextMsg(sender, text)).takeLast(5)
+                            (SessionState.cloudTexts.value + TextMsg(sender, text)).takeLast(60)
                     }
                 }
                 is RoomEvent.Disconnected -> {
@@ -491,14 +569,15 @@ class TelemetryService : Service() {
             try {
                 r.localParticipant?.publishData("CHAT|$clean".toByteArray())
                 SessionState.cloudTexts.value =
-                    (SessionState.cloudTexts.value + TextMsg("You", clean)).takeLast(5)
+                    (SessionState.cloudTexts.value + TextMsg("You", clean)).takeLast(60)
             } catch (e: Exception) {
                 SessionState.cloudError.value = "Text failed: ${e.message}"
             }
         }
     }
 
-    private fun setMicTalking(want: Boolean) {        val r = room ?: return
+    private fun setMicTalking(want: Boolean) {
+        val r = room ?: return
         if (!SessionState.cloudConnected.value) return
         scope.launch {
             try {

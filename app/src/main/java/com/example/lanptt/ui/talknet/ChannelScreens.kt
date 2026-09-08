@@ -1002,14 +1002,6 @@ private fun ChatDock(
                 .padding(horizontal = 14.dp, vertical = 10.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Box(
-                Modifier
-                    .width(28.dp)
-                    .height(4.dp)
-                    .clip(RoundedCornerShape(2.dp))
-                    .background(TalkMuted)
-            )
-            Spacer(Modifier.width(10.dp))
             Column(modifier = Modifier.weight(1f)) {
                 if (!expanded) {
                     if (texts.isNotEmpty()) {
@@ -1138,7 +1130,43 @@ private fun ChatDock(
                     .fillMaxWidth()
                     .padding(10.dp)
             ) {
+                // Free-text input — type anything, not just presets.
+                var draft by rememberSaveable { mutableStateOf("") }
+                Row(
+                    Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.Bottom,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    OutlinedTextField(
+                        value = draft,
+                        onValueChange = { draft = it },
+                        placeholder = { Text("Message…", color = TalkMuted, fontSize = 13.sp) },
+                        singleLine = true,
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier.weight(1f)
+                    )
+                    val canSend = draft.isNotBlank()
+                    Box(
+                        contentAlignment = Alignment.Center,
+                        modifier = Modifier
+                            .size(48.dp)
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(if (canSend) TalkMint else TalkCard2)
+                            .border(
+                                1.dp,
+                                if (canSend) TalkMint else TalkBorder,
+                                RoundedCornerShape(12.dp)
+                            )
+                            .clickable(enabled = canSend) {
+                                onSendText(draft.trim())
+                                draft = ""
+                            }
+                    ) {
+                        Text("▸", color = if (canSend) TalkBg else TalkMuted, fontSize = 18.sp, fontWeight = FontWeight.Bold)
+                    }
+                }
                 if (presets.isNotEmpty()) {
+                    Box(Modifier.height(8.dp))
                     QuickTextRow(presets = presets, onSend = onSendText)
                 }
                 Row(

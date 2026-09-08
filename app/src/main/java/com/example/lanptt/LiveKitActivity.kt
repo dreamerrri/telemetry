@@ -13,6 +13,9 @@ import android.view.KeyEvent
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.background
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -130,18 +133,6 @@ class LiveKitActivity : ComponentActivity() {
 
         volumeControlStream = AudioManager.STREAM_MUSIC
 
-        val need = mutableListOf<String>()
-        if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
-            need += Manifest.permission.RECORD_AUDIO
-        }
-        if (Build.VERSION.SDK_INT >= 33 &&
-            checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
-        ) {
-            need += Manifest.permission.POST_NOTIFICATIONS
-        }
-        if (need.isNotEmpty()) requestPermissions(need.toTypedArray(), 1002)
-        maybeAskBattery()
-
         startForegroundService(
             TelemetryService.cmd(this, TelemetryService.ACTION_START)
                 .putExtra("name", lanName)
@@ -221,7 +212,7 @@ class LiveKitActivity : ComponentActivity() {
                             .background(TalkBorder)
                     )
 
-                    // Pages.
+                    // Pages: swipeable Direct ↔ Rooms; BottomNav button still switches.
                     Box(modifier = Modifier.weight(1f)) {
                         if (settingsOpen) {
                             SettingsPage(
@@ -250,8 +241,23 @@ class LiveKitActivity : ComponentActivity() {
                                 ownIp = ownIp,
                                 onBack = { settingsOpen = false }
                             )
-                        } else when (tab) {
-                            MainTab.Direct -> {
+                        } else {
+                            // Swipeable pages: Direct (0) ↔ Rooms (1); BottomNav button still switches.
+                            val pagerState = rememberPagerState(pageCount = { 2 })
+                            LaunchedEffect(tab) {
+                                if (pagerState.currentPage != tab.ordinal && !pagerState.isScrollInProgress) {
+                                    pagerState.animateScrollToPage(tab.ordinal)
+                                }
+                            }
+                            LaunchedEffect(pagerState.currentPage) {
+                                switchTab(MainTab.entries[pagerState.currentPage])
+                            }
+                            HorizontalPager(
+                                state = pagerState,
+                                modifier = Modifier.fillMaxSize()
+                            ) { page ->
+                                when (MainTab.entries[page]) {
+                                    MainTab.Direct -> {
                                 if (transport == Transport.LAN) {
                                     if (directPhase == TalkState.Talk) {
                                         val directPeer = nearby.values.firstOrNull { it.ip == lanPeerIp }
@@ -414,6 +420,8 @@ class LiveKitActivity : ComponentActivity() {
                                             )
                                         }
                                     }
+                                }
+                            }
                                 }
                             }
                         }
@@ -671,6 +679,27 @@ class LiveKitActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         ownIp = LanDiscovery.detectOwnIp()
+        // One-time, in-place onboarding: mic permission first (stays in this
+        // activity), then the battery-exemption dialog — no settings detour
+        // that tears the activity down.
+        val prefs = getSharedPreferences("lk", MODE_PRIVATE)
+        if (!prefs.getBoolean("permAsked", false)) {
+            prefs.edit().putBoolean("permAsked", true).apply()
+            val need = buildList {
+                if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+                    add(Manifest.permission.RECORD_AUDIO)
+                }
+                if (Build.VERSION.SDK_INT >= 33 &&
+                    checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+                ) {
+                    add(Manifest.permission.POST_NOTIFICATIONS)
+                }
+            }
+            if (need.isNotEmpty()) {
+                requestPermissions(need.toTypedArray(), 1002)
+            }
+            maybeAskBattery()
+        }
     }
 
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<String>, grantResults: IntArray) {
@@ -685,18 +714,26 @@ class LiveKitActivity : ComponentActivity() {
     private fun maybeAskBattery() {
         val prefs = getSharedPreferences("lk", MODE_PRIVATE)
         if (prefs.getBoolean("battAsked", false)) return
+        prefs.edit().putBoolean("battAsked", true).apply()
         try {
             val pm = getSystemService(PowerManager::class.java)
             if (!pm.isIgnoringBatteryOptimizations(packageName)) {
+                // In-app native dialog ("Allow to run in background?") — no
+                // settings screen, no activity teardown. Requires the
+                // REQUEST_IGNORE_BATTERY_OPTIMIZATIONS manifest permission.
+                // Falls back to the optimization list if unavailable.
                 startActivity(
                     Intent(
                         Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
                         Uri.parse("package:$packageName")
-                    )
+                    ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                 )
             }
-        } catch (_: Exception) { }
-        prefs.edit().putBoolean("battAsked", true).apply()
+        } catch (_: Exception) {
+            try {
+                startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
+            } catch (_: Exception) { }
+        }
     }
 }
 
