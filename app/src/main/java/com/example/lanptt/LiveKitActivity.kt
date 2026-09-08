@@ -41,23 +41,27 @@ import androidx.lifecycle.lifecycleScope
 import com.example.lanptt.lan.LanDiscovery
 import com.example.lanptt.service.SessionState
 import com.example.lanptt.service.TelemetryService
-import com.example.lanptt.ui.talknet.ActiveScreen
 import com.example.lanptt.ui.talknet.BottomNav
 import com.example.lanptt.ui.talknet.ChatPeer
 import com.example.lanptt.ui.talknet.DefaultChannels
 import com.example.lanptt.ui.talknet.DirectDisabled
 import com.example.lanptt.ui.talknet.DirectPage
+import com.example.lanptt.ui.talknet.GearGlyph
 import com.example.lanptt.ui.talknet.HomeScreen
 import com.example.lanptt.ui.talknet.JoinScreen
 import com.example.lanptt.ui.talknet.MainTab
 import com.example.lanptt.ui.talknet.MePeer
 import com.example.lanptt.ui.talknet.MonoLabel
 import com.example.lanptt.ui.talknet.RoomListContent
+import com.example.lanptt.ui.talknet.SettingsPage
 import com.example.lanptt.ui.talknet.TalkChannel
+import com.example.lanptt.ui.talknet.TalkState
+import com.example.lanptt.ui.talknet.TalkSurface
 import com.example.lanptt.ui.talknet.Transport
 import com.example.lanptt.ui.talknet.TransportToggle
 import com.example.lanptt.ui.talknet.initialsFor
 import com.example.lanptt.ui.talknet.peerColorFor
+import com.example.lanptt.ui.talknet.peerColorForName
 import com.example.lanptt.ui.theme.LanPttTheme
 import com.example.lanptt.ui.theme.TalkBorder
 import com.example.lanptt.ui.theme.TalkMint
@@ -86,7 +90,6 @@ class LiveKitActivity : ComponentActivity() {
     private var cloudRecents by mutableStateOf<List<String>>(emptyList())
     private var lanRecents by mutableStateOf<List<String>>(emptyList())
     private var lanFreeWord by mutableStateOf("")
-    private var serverOpen by mutableStateOf(false)
     private var joinError by mutableStateOf<String?>(null)
     private var joining by mutableStateOf(false)
     private var volPtt by mutableStateOf(true)
@@ -97,6 +100,9 @@ class LiveKitActivity : ComponentActivity() {
     private var ownIp by mutableStateOf("...")
     private var lanPeerIp by mutableStateOf("")
     private var lanName by mutableStateOf("")
+    private var directPhase by mutableStateOf(TalkState.Setup)
+    private var live by mutableStateOf(false)
+    private var settingsOpen by mutableStateOf(false)
 
     /** Last-known cloud rosters per room, shown on Home cards. */
     private val rosterCache = mutableStateMapOf<String, List<ChatPeer>>()
@@ -160,7 +166,6 @@ class LiveKitActivity : ComponentActivity() {
                 val talking by SessionState.cloudTalking.collectAsState()
                 val cloudError by SessionState.cloudError.collectAsState()
                 val generation by SessionState.cloudGeneration.collectAsState()
-                val quality by SessionState.cloudQuality.collectAsState()
                 val cloudTexts by SessionState.cloudTexts.collectAsState()
 
                 LaunchedEffect(connected) {
@@ -206,6 +211,8 @@ class LiveKitActivity : ComponentActivity() {
                             )
                         }
                         TransportToggle(transport = transport, onTransport = { switchTransport(it) })
+                        Spacer(Modifier.width(8.dp))
+                        GearGlyph(onClick = { settingsOpen = !settingsOpen })
                     }
                     Box(
                         Modifier
@@ -216,24 +223,77 @@ class LiveKitActivity : ComponentActivity() {
 
                     // Pages.
                     Box(modifier = Modifier.weight(1f)) {
-                        when (tab) {
+                        if (settingsOpen) {
+                            SettingsPage(
+                                name = prefsName,
+                                onName = { onSettingsName(it) },
+                                volPtt = volPtt,
+                                onVolPtt = {
+                                    volPtt = it
+                                    prefs.edit().putBoolean("volPtt", it).apply()
+                                },
+                                presetsText = presetsText,
+                                onPresetsText = {
+                                    presetsText = it
+                                    prefs.edit().putString("quickTexts", it).apply()
+                                },
+                                url = prefsUrl,
+                                onUrl = {
+                                    prefsUrl = it
+                                    prefs.edit().putString("url", it).apply()
+                                },
+                                worker = prefsWorker,
+                                onWorker = {
+                                    prefsWorker = it
+                                    prefs.edit().putString("worker", it).apply()
+                                },
+                                ownIp = ownIp,
+                                onBack = { settingsOpen = false }
+                            )
+                        } else when (tab) {
                             MainTab.Direct -> {
                                 if (transport == Transport.LAN) {
-                                    DirectPage(
-                                        ownIp = ownIp,
-                                        lanName = lanName,
-                                        onLanName = { updateLanName(it) },
-                                        peerIp = lanPeerIp,
-                                        onPeerIp = { setLanPeer(it) },
-                                        nearby = nearby.values.sortedBy { it.name.lowercase() },
-                                        transmitting = lanTx,
-                                        status = lanStatus,
-                                        presets = parsePresets(presetsText),
-                                        onSendText = { sendLanText(lanPeerIp, "", it) },
-                                        texts = lanTexts.filter { it.room.isEmpty() },
-                                        onDown = { lanDown(it, "") },
-                                        onUp = { lanUp() }
-                                    )
+                                    if (directPhase == TalkState.Talk) {
+                                        val directPeer = nearby.values.firstOrNull { it.ip == lanPeerIp }
+                                        TalkSurface(
+                                            identity = lanPeerIp,
+                                            subtitle = "P2P · $lanPeerIp",
+                                            peers = listOf(MePeer) + listOf(
+                                                directPeer?.let {
+                                                    ChatPeer(it.ip, it.name, initialsFor(it.name), peerColorForName(it.name))
+                                                } ?: ChatPeer(lanPeerIp, "Peer", initialsFor(lanPeerIp), peerColorFor(lanPeerIp))
+                                            ),
+                                            isSpeaking = { it.id == "me" && lanTx },
+                                            speaker = if (lanTx) MePeer else null,
+                                            transmitting = lanTx,
+                                            liveMode = live,
+                                            onToggleLive = { live = it; if (it) lanDown(lanPeerIp, "") else lanUp() },
+                                            presets = parsePresets(presetsText),
+                                            onSendText = { sendLanText(lanPeerIp, "", it) },
+                                            texts = lanTexts.filter { it.room.isEmpty() },
+                                            transportLine = if (live) lanStatus else "LAN · Direct",
+                                            onBack = { live = false; lanUp(); directPhase = TalkState.Setup },
+                                            onChange = { live = false; lanUp(); directPhase = TalkState.Setup },
+                                            onDown = { lanDown(lanPeerIp, "") },
+                                            onUp = { if (!live) lanUp() }
+                                        )
+                                    } else {
+                                        DirectPage(
+                                            ownIp = ownIp,
+                                            lanName = lanName,
+                                            onLanName = { onSettingsName(it) },
+                                            peerIp = lanPeerIp,
+                                            onPeerIp = { setLanPeer(it) },
+                                            nearby = nearby.values.sortedBy { it.name.lowercase() },
+                                            onTalk = {
+                                                if (lanPeerIp.isNotBlank()) {
+                                                    live = false
+                                                    lanUp()
+                                                    directPhase = TalkState.Talk
+                                                }
+                                            }
+                                        )
+                                    }
                                 } else {
                                     DirectDisabled(onSwitchToLan = { switchTransport(Transport.LAN) })
                                 }
@@ -247,9 +307,15 @@ class LiveKitActivity : ComponentActivity() {
                                             transmitting = lanTx,
                                             texts = lanTexts.filter { it.room == lanRoom },
                                             presets = parsePresets(presetsText),
+                                            lanStatus = lanStatus,
                                             onDown = { lanDown("", lanRoom) },
                                             onUp = { lanUp() },
                                             onSendText = { sendLanText("", lanRoom, it) },
+                                            live = live,
+                                            onToggleLive = {
+                                                live = it
+                                                if (it) lanDown("", lanRoom) else lanUp()
+                                            },
                                             onLeave = { setLanRoom("") }
                                         )
                                     } else {
@@ -304,22 +370,7 @@ class LiveKitActivity : ComponentActivity() {
                                                 onSelect = { selectedChannel = it; freeRoom = "" },
                                                 freeRoom = freeRoom,
                                                 onFreeRoom = { freeRoom = it },
-                                                volPtt = volPtt,
-                                                onVolPtt = {
-                                                    volPtt = it
-                                                    prefs.edit().putBoolean("volPtt", it).apply()
-                                                },
-                                                presetsText = presetsText,
-                                                onPresetsText = {
-                                                    presetsText = it
-                                                    prefs.edit().putString("quickTexts", it).apply()
-                                                },
-                                                url = prefsUrl,
-                                                onUrl = { prefsUrl = it },
-                                                worker = prefsWorker,
-                                                onWorker = { prefsWorker = it },
-                                                serverOpen = serverOpen,
-                                                onToggleServer = { serverOpen = !serverOpen },
+                                                
                                                 error = joinError ?: if (joining) "Getting token..." else null,
                                                 onJoin = { join() },
                                                 onBack = { cloudScreen = CloudScreen.Home }
@@ -331,9 +382,10 @@ class LiveKitActivity : ComponentActivity() {
                                                 if (it.id == "me") talking else speakingIds.contains(it.id)
                                             }
                                             val speaker = peers.firstOrNull(isSpeaking)
-                                            ActiveScreen(
-                                                channelName = DefaultChannels.firstOrNull { it.id == chId }?.name
+                                            TalkSurface(
+                                                identity = DefaultChannels.firstOrNull { it.id == chId }?.name
                                                     ?: chId ?: "Channel",
+                                                subtitle = "Connected · Cloud",
                                                 peers = peers,
                                                 isSpeaking = isSpeaking,
                                                 speaker = speaker,
@@ -343,20 +395,22 @@ class LiveKitActivity : ComponentActivity() {
                                                     cloudLive = it
                                                     setMicTalking(it)
                                                 },
-                                                qualityDot = {
-                                                    com.example.lanptt.ui.talknet.qualityColor(quality[it.id])
-                                                },
                                                 presets = parsePresets(presetsText),
                                                 onSendText = { sendText(it) },
                                                 texts = cloudTexts,
-                                                transportLine = "Connected · Cloud",
+                                                transportLine = cloudError ?: if (connected) "Connected · LiveKit" else "Connecting...",
                                                 onBack = {
                                                     cloudLive = false
                                                     cloudLeave()
                                                     cloudScreen = CloudScreen.Home
                                                 },
+                                                onChange = {
+                                                    cloudLive = false
+                                                    cloudLeave()
+                                                    cloudScreen = CloudScreen.Join
+                                                },
                                                 onDown = { setMicTalking(true) },
-                                                onUp = { setMicTalking(false) }
+                                                onUp = { if (!cloudLive) setMicTalking(false) }
                                             )
                                         }
                                     }
@@ -365,7 +419,7 @@ class LiveKitActivity : ComponentActivity() {
                         }
                     }
 
-                    BottomNav(tab = tab, onTab = { tab = it })
+                    BottomNav(tab = tab, onTab = { switchTab(it) })
                 }
             }
         }
@@ -378,10 +432,23 @@ class LiveKitActivity : ComponentActivity() {
         // Leave everything before switching transports.
         startService(TelemetryService.cmd(this, TelemetryService.ACTION_LAN_UP))
         cloudLive = false
+        live = false
+        directPhase = TalkState.Setup
         if (SessionState.cloudConnected.value) cloudLeave()
         setLanRoom("")
         transport = t
         getSharedPreferences("lk", MODE_PRIVATE).edit().putString("transport", t.name).apply()
+    }
+
+    private fun switchTab(t: MainTab) {
+        if (t == tab) return
+        live = false
+        directPhase = TalkState.Setup
+        lanUp()
+        if (transport == Transport.CLOUD && cloudScreen == CloudScreen.Active && !cloudLive) {
+            setMicTalking(false)
+        }
+        tab = t
     }
 
     /* ─── LAN helpers ──────────────────────────────────── */
@@ -392,6 +459,12 @@ class LiveKitActivity : ComponentActivity() {
         startService(
             TelemetryService.cmd(this, TelemetryService.ACTION_SET_NAME).putExtra("name", name)
         )
+    }
+
+    private fun onSettingsName(n: String) {
+        prefsName = n
+        updateLanName(n)
+        getSharedPreferences("lk", MODE_PRIVATE).edit().putString("name", n).apply()
     }
 
     private fun setLanPeer(ip: String) {
@@ -673,15 +746,17 @@ private fun LiveKitActivity.LanRoomDetail(
     transmitting: Boolean,
     texts: List<com.example.lanptt.service.TextMsg>,
     presets: List<String>,
+    lanStatus: String,
     onDown: () -> Unit,
     onUp: () -> Unit,
     onSendText: (String) -> Unit,
+    live: Boolean,
+    onToggleLive: (Boolean) -> Unit,
     onLeave: () -> Unit
 ) {
-    var live by rememberSaveable { mutableStateOf(false) }
     val members = nearby.filter { it.room == room }
     val all = listOf(
-        com.example.lanptt.ui.talknet.MePeer
+        MePeer
     ) + members.map { m ->
         ChatPeer(
             m.ip, m.name,
@@ -689,27 +764,28 @@ private fun LiveKitActivity.LanRoomDetail(
                 if (it.size == 1) it[0].take(2).uppercase()
                 else (it[0].take(1) + it[1].take(1)).uppercase()
             },
-            com.example.lanptt.ui.talknet.peerColorForName(m.name)
+            peerColorForName(m.name)
         )
     }
-    ActiveScreen(
-        channelName = room,
+    TalkSurface(
+        identity = room,
+        subtitle = "${all.size} online · LAN",
         peers = all,
         isSpeaking = { it.id == "me" && transmitting },
-        speaker = if (transmitting) com.example.lanptt.ui.talknet.MePeer else null,
+        speaker = if (transmitting) MePeer else null,
         transmitting = transmitting,
         liveMode = live,
-        onToggleLive = {
-            live = it
-            if (it) onDown() else onUp()
-        },
-        qualityDot = { null },
+        onToggleLive = onToggleLive,
         presets = presets,
         onSendText = onSendText,
         texts = texts,
-        transportLine = "LAN · $room",
+        transportLine = if (live) lanStatus else "LAN · $room",
         onBack = {
-            live = false
+            onToggleLive(false)
+            onLeave()
+        },
+        onChange = {
+            onToggleLive(false)
             onLeave()
         },
         onDown = onDown,
