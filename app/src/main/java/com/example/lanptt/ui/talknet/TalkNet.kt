@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
@@ -31,6 +32,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
@@ -49,6 +51,7 @@ import androidx.compose.ui.zIndex
 import com.example.lanptt.ui.theme.TalkBg
 import com.example.lanptt.ui.theme.TalkBorder
 import com.example.lanptt.ui.theme.TalkCard
+import com.example.lanptt.ui.theme.TalkCard2
 import com.example.lanptt.ui.theme.TalkMint
 import com.example.lanptt.ui.theme.TalkMintBright
 import com.example.lanptt.ui.theme.TalkMuted
@@ -85,6 +88,57 @@ fun initialsFor(name: String): String {
 }
 
 val MePeer = ChatPeer("me", "You", "YO", TalkMint)
+
+/* ─── Click without the ripple / "static" press flash ────── */
+
+/**
+ * [Modifier.clickable] without an [Indication] (ripple). The default Material
+ * indication renders as a grainy "static" flash on tap on this dark theme, so
+ * interactive surfaces here opt out of it — the press is still dispatched and
+ * keyboard/screen-reader semantics are preserved.
+ */
+fun Modifier.quietClickable(
+    enabled: Boolean = true,
+    onClickLabel: String? = null,
+    role: Role? = null,
+    onClick: () -> Unit
+): Modifier = this.clickable(
+    interactionSource = null,
+    indication = null,
+    enabled = enabled,
+    onClickLabel = onClickLabel,
+    role = role,
+    onClick = onClick
+)
+
+/* ─── Primary filled button (no Material ripple) ─────────── */
+
+@Composable
+fun TalkPrimaryButton(
+    text: String,
+    onClick: () -> Unit,
+    enabled: Boolean = true,
+    modifier: Modifier = Modifier,
+    shape: androidx.compose.ui.graphics.Shape = RoundedCornerShape(16.dp),
+    fontSize: androidx.compose.ui.unit.TextUnit = 14.sp
+) {
+    Box(
+        contentAlignment = Alignment.Center,
+        modifier = modifier
+            .defaultMinSize(minHeight = 44.dp)
+            .clip(shape)
+            .background(if (enabled) TalkMint else TalkCard2)
+            .quietClickable(enabled = enabled, role = Role.Button, onClick = onClick)
+            .padding(horizontal = 16.dp, vertical = 12.dp)
+    ) {
+        Text(
+            text,
+            color = if (enabled) TalkBg else TalkMuted,
+            fontSize = fontSize,
+            fontWeight = FontWeight.Bold
+        )
+    }
+}
 
 /* ─── Mono label (JetBrains Mono stand-in) ─────────────── */
 
@@ -232,9 +286,9 @@ fun QuickTextRow(
                 contentAlignment = Alignment.Center,
                 modifier = Modifier
                     .clip(RoundedCornerShape(50.dp))
-                    .background(Color(0xFF252A3A))
-                    .border(1.dp, Color(0xFF2A2E3D), RoundedCornerShape(50.dp))
-                    .clickable { onSend(p) }
+                    .background(TalkCard2)
+                    .border(1.dp, TalkBorder, RoundedCornerShape(50.dp))
+                    .quietClickable { onSend(p) }
                     .padding(horizontal = 14.dp, vertical = 8.dp)
             ) {
                 Text(p, color = TalkText, fontSize = 13.sp)
@@ -293,7 +347,7 @@ fun AvatarStack(
                 modifier = Modifier
                     .offset(x = (-10).dp)
                     .size(avatarSize)
-                    .background(Color(0xFF2A2E3D), CircleShape)
+                    .background(TalkBorder, CircleShape)
                     .border(2.dp, TalkBg, CircleShape)
             ) {
                 Text(text = "+$rest", color = TalkTextDim, fontSize = 11.sp)
@@ -310,9 +364,9 @@ fun TalkBackButton(onBack: () -> Unit, modifier: Modifier = Modifier) {
         contentAlignment = Alignment.Center,
         modifier = modifier
             .size(36.dp)
-            .background(Color(0xFF1E2230), CircleShape)
-            .border(1.dp, Color(0xFF2A2E3D), CircleShape)
-            .clickable(onClick = onBack)
+            .background(TalkCard, CircleShape)
+            .border(1.dp, TalkBorder, CircleShape)
+            .quietClickable(role = Role.Button, onClick = onBack)
     ) {
         Canvas(Modifier.size(16.dp)) {
             val w = size.width
@@ -431,38 +485,50 @@ fun RoundPttButton(
         }
     }
 }
-/* ─── Settings gear ─────────────────────────────────────── */
+/* ─── Settings button (real, accessible) ─────────────────── */
 
 @Composable
-fun GearGlyph(onClick: () -> Unit, modifier: Modifier = Modifier) {
+fun SettingsButton(onClick: () -> Unit, modifier: Modifier = Modifier) {
     Box(
         contentAlignment = Alignment.Center,
         modifier = modifier
-            .size(40.dp)
-            .background(TalkCard, CircleShape)
-            .border(1.dp, TalkBorder, CircleShape)
-            .clickable(onClick = onClick)
+            .clip(RoundedCornerShape(24.dp))
+            .background(TalkCard2, RoundedCornerShape(24.dp))
+            .border(1.dp, TalkBorder, RoundedCornerShape(24.dp))
+            .quietClickable(role = Role.Button, onClick = onClick)
+            .padding(horizontal = 12.dp, vertical = 8.dp)
     ) {
-        Canvas(Modifier.size(18.dp)) {
-            val w = size.width
-            val h = size.height
-            val c = TalkMuted
-            drawCircle(
-                color = c,
-                radius = w * 0.28f,
-                center = Offset(w * 0.5f, h * 0.5f),
-                style = Stroke(width = 1.6f)
-            )
-            for (i in 0 until 8) {
-                val a = (Math.PI * 2 * i / 8).toFloat()
-                val r1 = w * 0.28f
-                val r2 = w * 0.44f
-                val x0 = w * 0.5f + cos(a) * r1
-                val y0 = h * 0.5f + sin(a) * r1
-                val x1 = w * 0.5f + cos(a) * r2
-                val y1 = h * 0.5f + sin(a) * r2
-                drawLine(c, Offset(x0, y0), Offset(x1, y1), strokeWidth = 2f, cap = StrokeCap.Round)
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(7.dp)
+        ) {
+            Canvas(Modifier.size(16.dp)) {
+                val w = size.width
+                val h = size.height
+                val c = TalkTextDim
+                drawCircle(
+                    color = c,
+                    radius = w * 0.25f,
+                    center = Offset(w * 0.5f, h * 0.5f),
+                    style = Stroke(width = 1.5f)
+                )
+                for (i in 0 until 8) {
+                    val a = (Math.PI * 2 * i / 8).toFloat()
+                    val r1 = w * 0.25f
+                    val r2 = w * 0.40f
+                    val x0 = w * 0.5f + cos(a) * r1
+                    val y0 = h * 0.5f + sin(a) * r1
+                    val x1 = w * 0.5f + cos(a) * r2
+                    val y1 = h * 0.5f + sin(a) * r2
+                    drawLine(c, Offset(x0, y0), Offset(x1, y1), strokeWidth = 1.6f, cap = StrokeCap.Round)
+                }
             }
+            Text(
+                "Settings",
+                color = TalkText,
+                fontSize = 13.sp,
+                fontWeight = FontWeight.SemiBold
+            )
         }
     }
 }

@@ -29,8 +29,6 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
@@ -101,7 +99,7 @@ fun TransportToggle(
                 modifier = Modifier
                     .clip(RoundedCornerShape(7.dp))
                     .background(if (sel) TalkMint else TalkCard)
-                    .clickable { onTransport(t) }
+                    .quietClickable { onTransport(t) }
                     .padding(horizontal = 12.dp, vertical = 6.dp)
             ) {
                 Text(
@@ -129,29 +127,28 @@ fun BottomNav(
                 .height(1.dp)
                 .background(TalkBorder)
         )
-        Row(modifier = Modifier.fillMaxWidth()) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 8.dp)
+        ) {
             MainTab.entries.forEach { t ->
                 val sel = tab == t
                 Column(
                     horizontalAlignment = Alignment.CenterHorizontally,
                     modifier = Modifier
                         .weight(1f)
-                        .clickable { onTab(t) }
-                        .padding(vertical = 12.dp)
+                        .clip(RoundedCornerShape(16.dp))
+                        .background(if (sel) TalkCard2 else Color.Transparent)
+                        .quietClickable { onTab(t) }
+                        .padding(vertical = 10.dp)
                 ) {
                     Text(
                         t.name.uppercase(),
                         color = if (sel) TalkMint else TalkMuted,
-                        fontSize = 12.sp,
+                        fontSize = 11.sp,
                         fontWeight = FontWeight.Bold,
-                        letterSpacing = 1.5.sp
-                    )
-                    Spacer(Modifier.height(4.dp))
-                    Box(
-                        Modifier
-                            .width(24.dp)
-                            .height(2.dp)
-                            .background(if (sel) TalkMint else Color.Transparent, CircleShape)
+                        letterSpacing = 1.2.sp
                     )
                 }
             }
@@ -210,7 +207,7 @@ fun ChannelCard(
             .clip(RoundedCornerShape(16.dp))
             .background(TalkCard)
             .border(1.dp, TalkBorder, RoundedCornerShape(16.dp))
-            .clickable(onClick = onTap)
+            .quietClickable(onClick = onTap)
             .padding(16.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
@@ -301,20 +298,13 @@ fun RoomListContent(
                 Spacer(Modifier.height(8.dp))
                 MonoLabel("Any word is a channel. Same word = same room.")
                 Spacer(Modifier.height(8.dp))
-                Button(
+                TalkPrimaryButton(
+                    text = "JOIN",
                     onClick = onJoinWord,
                     enabled = freeWord.isNotBlank(),
                     modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(12.dp),
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = TalkMint,
-                        contentColor = TalkBg,
-                        disabledContainerColor = TalkCard2,
-                        disabledContentColor = TalkMuted
-                    )
-                ) {
-                    Text("JOIN", fontWeight = FontWeight.Bold)
-                }
+                    shape = RoundedCornerShape(12.dp)
+                )
             }
         }
     }
@@ -504,13 +494,11 @@ fun DirectDisabled(
             fontSize = 14.sp
         )
         Spacer(Modifier.height(16.dp))
-        Button(
+        TalkPrimaryButton(
+            text = "SWITCH TO LAN",
             onClick = onSwitchToLan,
-            shape = RoundedCornerShape(12.dp),
-            colors = ButtonDefaults.buttonColors(containerColor = TalkMint, contentColor = TalkBg)
-        ) {
-            Text("SWITCH TO LAN", fontWeight = FontWeight.Bold)
-        }
+            shape = RoundedCornerShape(12.dp)
+        )
     }
 }
 
@@ -583,7 +571,7 @@ fun DirectPage(
                                     if (selected) TalkMint else TalkBorder,
                                     RoundedCornerShape(16.dp)
                                 )
-                                .clickable { onPeerIp(peer.ip) }
+                                .quietClickable { onPeerIp(peer.ip) }
                                 .padding(14.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
@@ -629,26 +617,15 @@ fun DirectPage(
             )
             Spacer(Modifier.height(12.dp))
         }
-        Button(
+        TalkPrimaryButton(
+            text = if (canTalk) "Open Radio · $peerIp" else "Select a peer to talk",
             onClick = onTalk,
             enabled = canTalk,
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(bottom = 16.dp),
-            shape = RoundedCornerShape(16.dp),
-            colors = ButtonDefaults.buttonColors(
-                containerColor = TalkMint,
-                contentColor = TalkBg,
-                disabledContainerColor = TalkCard2,
-                disabledContentColor = TalkMuted
-            )
-        ) {
-            Text(
-                if (canTalk) "Open Radio · $peerIp" else "Select a peer to talk",
-                fontWeight = FontWeight.Bold,
-                modifier = Modifier.padding(vertical = 8.dp)
-            )
-        }
+            shape = RoundedCornerShape(16.dp)
+        )
     }
 }
 /* ─── JOIN (cloud — lean: name + room only) ─────────────── */
@@ -738,7 +715,7 @@ fun JoinScreen(
                                     if (sel) TalkMint else TalkBorder,
                                     RoundedCornerShape(16.dp)
                                 )
-                                .clickable { onSelect(ch.id) }
+                                .quietClickable { onSelect(ch.id) }
                                 .padding(14.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
@@ -785,25 +762,14 @@ Spacer(Modifier.width(16.dp))
                 .fillMaxWidth()
                 .padding(16.dp)
         ) {
-            Button(
+            TalkPrimaryButton(
+                text = "Join Channel",
                 onClick = onJoin,
                 enabled = canJoin,
                 modifier = Modifier.fillMaxWidth(),
                 shape = RoundedCornerShape(16.dp),
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = TalkMint,
-                    contentColor = TalkBg,
-                    disabledContainerColor = TalkCard2,
-                    disabledContentColor = TalkMuted
-                )
-            ) {
-                Text(
-                    "Join Channel",
-                    fontSize = 16.sp,
-                    fontWeight = FontWeight.Bold,
-                    modifier = Modifier.padding(vertical = 8.dp)
-                )
-            }
+                fontSize = 16.sp
+            )
         }
     }
 }
@@ -855,7 +821,7 @@ fun TalkSurface(
                     .clip(RoundedCornerShape(8.dp))
                     .background(TalkCard)
                     .border(1.dp, TalkBorder, RoundedCornerShape(8.dp))
-                    .clickable { onChange() }
+                    .quietClickable { onChange() }
                     .padding(horizontal = 12.dp, vertical = 8.dp)
             ) {
                 Text(
@@ -998,7 +964,7 @@ private fun ChatDock(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .clickable { onToggle(!expanded) }
+                .quietClickable { onToggle(!expanded) }
                 .padding(horizontal = 14.dp, vertical = 10.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
@@ -1110,7 +1076,7 @@ private fun ChatDock(
                             .padding(bottom = 8.dp)
                             .clip(RoundedCornerShape(50.dp))
                             .background(TalkMint, RoundedCornerShape(50.dp))
-                            .clickable { listState.requestScrollToItem(texts.lastIndex) },
+                            .quietClickable { listState.requestScrollToItem(texts.lastIndex) },
                         horizontalArrangement = Arrangement.spacedBy(4.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
@@ -1157,7 +1123,7 @@ private fun ChatDock(
                                 if (canSend) TalkMint else TalkBorder,
                                 RoundedCornerShape(12.dp)
                             )
-                            .clickable(enabled = canSend) {
+                            .quietClickable(enabled = canSend) {
                                 onSendText(draft.trim())
                                 draft = ""
                             }
@@ -1199,7 +1165,7 @@ private val MockPeers = listOf(
     ChatPeer("u3", "Tom Okafor", "TO", Color(0xFF43BCCD))
 )
 
-@Preview(showBackground = true, backgroundColor = 0xFF0D0F13)
+@Preview(showBackground = true, backgroundColor = 0xFF0A0F1E)
 @Composable
 fun HomePreview() {
     LanPttTheme(darkTheme = true) {
@@ -1217,7 +1183,7 @@ fun HomePreview() {
     }
 }
 
-@Preview(showBackground = true, backgroundColor = 0xFF0D0F13)
+@Preview(showBackground = true, backgroundColor = 0xFF0A0F1E)
 @Composable
 fun JoinPreview() {
     LanPttTheme(darkTheme = true) {
@@ -1230,7 +1196,7 @@ fun JoinPreview() {
     }
 }
 
-@Preview(showBackground = true, backgroundColor = 0xFF0D0F13)
+@Preview(showBackground = true, backgroundColor = 0xFF0A0F1E)
 @Composable
 fun DirectPreview() {
     LanPttTheme(darkTheme = true) {
@@ -1246,7 +1212,7 @@ fun DirectPreview() {
     }
 }
 
-@Preview(showBackground = true, backgroundColor = 0xFF0D0F13)
+@Preview(showBackground = true, backgroundColor = 0xFF0A0F1E)
 @Composable
 fun SettingsPreview() {
     LanPttTheme(darkTheme = true) {
@@ -1261,7 +1227,7 @@ fun SettingsPreview() {
     }
 }
 
-@Preview(showBackground = true, backgroundColor = 0xFF0D0F13)
+@Preview(showBackground = true, backgroundColor = 0xFF0A0F1E)
 @Composable
 fun TalkSurfacePreview() {
     LanPttTheme(darkTheme = true) {
