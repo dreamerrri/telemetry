@@ -55,6 +55,8 @@ import com.example.lanptt.ui.theme.TalkMuted
 import com.example.lanptt.ui.theme.TalkText
 import com.example.lanptt.ui.theme.TalkTextDim
 import kotlin.math.abs
+import kotlin.math.cos
+import kotlin.math.sin
 
 /* ─── Data ─────────────────────────────────────────────── */
 
@@ -211,14 +213,6 @@ fun Avatar(
             )
         }
     }
-}
-
-/** ConnectionQuality name -> dot color. */
-fun qualityColor(q: String?): Color? = when (q) {
-    "EXCELLENT", "GOOD" -> TalkMint
-    "POOR" -> Color(0xFFE9C46A)
-    "LOST" -> Color(0xFFF87171)
-    else -> null
 }
 
 /* ─── Quick texts ──────────────────────────────────────── */
@@ -434,6 +428,41 @@ fun RoundPttButton(
                 fontWeight = FontWeight.Bold,
                 letterSpacing = 0.5.sp
             )
+        }
+    }
+}
+/* ─── Settings gear ─────────────────────────────────────── */
+
+@Composable
+fun GearGlyph(onClick: () -> Unit, modifier: Modifier = Modifier) {
+    Box(
+        contentAlignment = Alignment.Center,
+        modifier = modifier
+            .size(40.dp)
+            .background(TalkCard, CircleShape)
+            .border(1.dp, TalkBorder, CircleShape)
+            .clickable(onClick = onClick)
+    ) {
+        Canvas(Modifier.size(18.dp)) {
+            val w = size.width
+            val h = size.height
+            val c = TalkMuted
+            drawCircle(
+                color = c,
+                radius = w * 0.28f,
+                center = Offset(w * 0.5f, h * 0.5f),
+                style = Stroke(width = 1.6f)
+            )
+            for (i in 0 until 8) {
+                val a = (Math.PI * 2 * i / 8).toFloat()
+                val r1 = w * 0.28f
+                val r2 = w * 0.44f
+                val x0 = w * 0.5f + cos(a) * r1
+                val y0 = h * 0.5f + sin(a) * r1
+                val x1 = w * 0.5f + cos(a) * r2
+                val y1 = h * 0.5f + sin(a) * r2
+                drawLine(c, Offset(x0, y0), Offset(x1, y1), strokeWidth = 2f, cap = StrokeCap.Round)
+            }
         }
     }
 }
