@@ -28,8 +28,10 @@ Everything audio runs in a foreground service, so it keeps talking with the scre
 * Connection-quality dots on cloud avatars (mint / amber / red)
 
 **Platform**
-* Foreground service (`microphone` type) with sticky notification + Stop action
-* Jetpack Compose + Material 3, dark TalkNet theme, `@Preview` per screen
+* Foreground service (`microphone` type) with sticky notification + Stop action — keeps talking with the screen off
+* First-launch onboarding: Welcome → Permissions (with rationale) → Battery exemption → Done; the service never starts before onboarding completes
+* Android 14+ safe: idles as a `mediaPlayback` service and escalates to the mic type only while transmitting, so a fresh install without mic permission can't crash it
+* Jetpack Compose + Material 3 Expressive dark TalkNet theme
 * App icon: mint mic + telemetry waves adaptive icon on `#14262A` (incl. monochrome themed-icon variant)
 
 ## Using the app
@@ -52,7 +54,7 @@ wrangler deploy
 
 ## Build from source
 
-**Android Studio** (recommended): open the `telemetry` folder → Trust Project → wait for Gradle sync → Run (`Shift+F10`) on an emulator or USB device. `@Preview` functions (`HomePreview`, `JoinPreview`, `ActivePreview`, `LanScreenPreview`) render without a device.
+**Android Studio** (recommended): open the `telemetry` folder → Trust Project → wait for Gradle sync → Run (`Shift+F10`) on an emulator or USB device.
 
 **Command line:** needs AGP 9.x-compatible Gradle (9.5+) and the Studio-bundled JDK:
 
@@ -92,32 +94,7 @@ ship with a debug signature. Back up `app/telemetry-release.jks` plus
 `keystore.properties` somewhere safe (password manager + offline copy) — lose
 the key and Play Store updates for this app id become impossible.
 
-## Architecture
-
-```
-Activities (UI only, Compose)
-   │ intents (commands) / StateFlow (state)
-   ▼
-TelemetryService (foreground, START_STICKY)
-   ├── LAN  UDP rx/tx (:50005) + beacons (:50006)
-   └── Cloud  LiveKit room (token → connect → publish/mute/data)
-                   ▲
-Cloudflare Worker ─┘  POST /token {room, identity} → {token, url}
-```
-
-Key files:
-
-| Path | Role |
-|---|---|
-| `app/…/MainActivity.kt` | LAN Direct screen (delegates to service) |
-| `app/…/LiveKitActivity.kt` | Home / Join / Active cloud flow (delegates to service) |
-| `app/…/service/TelemetryService.kt` | All audio + network + notification |
-| `app/…/service/SessionState.kt` | Shared flows (status, peers, speakers, texts, quality) |
-| `app/…/lan/Discovery.kt` | UDP presence beacons + listener |
-| `app/…/ui/talknet/` | TalkNet design system + channel screens |
-| `token-server/` | Cloudflare Worker token minter |
-
-## Permissions (and why)
+## Permissions (and why you’ll be asked)
 
 | Permission | Why |
 |---|---|
