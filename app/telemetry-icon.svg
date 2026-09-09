@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="2048" height="2048" viewBox="0 0 2048 2048">
+  <rect width="2048" height="2048" rx="410" ry="410" fill="#14262A"/>
+
+  <!-- microphone capsule -->
+  <path d="M840 818V632C840 525.3 926.3 439 1033 439C1139.7 439 1226 525.3 1226 632V818Z" fill="#67DEBD"/>
+  <path d="M840 875H1226V1070C1226 1177.2 1139.7 1264 1033 1264C926.3 1264 840 1177.2 840 1070Z" fill="#67DEBD"/>
+
+  <!-- microphone yoke and stand -->
+  <path d="M745 970V1064C745 1241.6 873.9 1386 1033 1386C1192.1 1386 1321 1241.6 1321 1064V970"
+        fill="none" stroke="#67DEBD" stroke-width="50" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M1033 1386V1577" fill="none" stroke="#67DEBD" stroke-width="50" stroke-linecap="round"/>
+  <path d="M834 1596H1232" fill="none" stroke="#67DEBD" stroke-width="50" stroke-linecap="round"/>
+
+  <!-- telemetry / radio waves -->
+  <path d="M448 579C271 776 271 1152 448 1349" fill="none" stroke="#67DEBD" stroke-width="50" stroke-linecap="round"/>
+  <path d="M586 718C475 849 475 1078 586 1209" fill="none" stroke="#67DEBD" stroke-width="50" stroke-linecap="round"/>
+  <path d="M1618 579C1795 776 1795 1152 1618 1349" fill="none" stroke="#67DEBD" stroke-width="50" stroke-linecap="round"/>
+  <path d="M1480 718C1591 849 1591 1078 1480 1209" fill="none" stroke="#67DEBD" stroke-width="50" stroke-linecap="round"/>
+</svg>

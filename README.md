@@ -30,11 +30,11 @@ Everything audio runs in a foreground service, so it keeps talking with the scre
 **Platform**
 * Foreground service (`microphone` type) with sticky notification + Stop action
 * Jetpack Compose + Material 3, dark TalkNet theme, `@Preview` per screen
-* App icon: mint `//T` adaptive icon (incl. monochrome variant)
+* App icon: mint mic + telemetry waves adaptive icon on `#14262A` (incl. monochrome themed-icon variant)
 
 ## Using the app
 
-1. Install `app-debug.apk` from [Releases](../../releases) (debug-signed).
+1. Install `app-release.apk` from [Releases](../../releases) (release-signed).
 2. Grant **Microphone** (and Notifications on Android 13+) when asked; accept the battery-optimization prompt so it works screen-off.
 3. **LAN:** open the LAN tab, set your name, tap a NEARBY peer (or type an IP), open LAN Talk, hold to talk. Both phones must be on the same WiFi (or one phone's hotspot). Guest WiFis with client isolation block device-to-device traffic — use the main SSID or hotspot mode.
 4. **Cloud:** open the CLOUD tab → `+ Join` → name + channel → Join. First run needs the LiveKit URL + token-server URL (Server settings). Hold to talk.
@@ -63,6 +63,34 @@ $env:ANDROID_HOME = "$env:LOCALAPPDATA\Android\Sdk"
 ```
 
 APK lands at `app/build/outputs/apk/debug/app-debug.apk` (debug-signed).
+
+### Official release build (signed)
+
+Release builds are signed with `app/telemetry-release.jks` (4096-bit RSA, 30-year
+validity). Credentials live in `keystore.properties` at the repo root, which is
+gitignored and never committed:
+
+```properties
+storeFile=app/telemetry-release.jks
+storePassword=...
+keyAlias=telemetry
+keyPassword=...
+```
+
+```powershell
+$env:JAVA_HOME = "C:\Program Files\Android\Android Studio\jbr"
+$env:ANDROID_HOME = "$env:LOCALAPPDATA\Android\Sdk"
+& "$env:USERPROFILE\.gradle\wrapper\dists\gradle-9.5.0-bin\<hash>\gradle-9.5.0\bin\gradle.bat" :app:assembleRelease :app:bundleRelease
+```
+
+This produces a release-signed APK at `app/build/outputs/apk/release/app-release.apk`
+and an upload bundle at `app/build/outputs/bundle/release/app-release.aab`
+(APK Signature Scheme v2; verify with
+`apksigner verify --verbose --print-certs`). The build fails fast with a clear
+message if `keystore.properties` is missing, so a release can never silently
+ship with a debug signature. Back up `app/telemetry-release.jks` plus
+`keystore.properties` somewhere safe (password manager + offline copy) — lose
+the key and Play Store updates for this app id become impossible.
 
 ## Architecture
 
@@ -102,7 +130,6 @@ Key files:
 
 ## Known limits
 
-* Debug-signed APKs only (no release signing yet).
 * No end-to-end encryption (LiveKit transport security only; LAN is raw PCM).
 * Guest/isolated WiFis block LAN entirely — hotspot mode is the fallback.
 * No background-service exemption handling beyond the first-run prompt.

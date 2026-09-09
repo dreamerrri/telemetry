@@ -1,8 +1,27 @@
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     kotlin("android")
     kotlin("plugin.compose")
 }
+
+// Official release signing. Credentials live in <root>/keystore.properties
+// (gitignored, never committed):
+//   storeFile=app/telemetry-release.jks
+//   storePassword=...
+//   keyAlias=telemetry
+//   keyPassword=...
+// Release builds fail fast with a clear message when this is missing instead
+// of silently falling back to a debug signature. Debug builds and IDE sync
+// are unaffected on machines without the key.
+val keystorePropertiesFile = rootProject.file("keystore.properties")
+val keystoreProperties = Properties()
+if (keystorePropertiesFile.exists()) {
+    keystorePropertiesFile.inputStream().use { keystoreProperties.load(it) }
+}
+val releaseRequested =
+    gradle.startParameter.taskNames.any { it.contains("release", ignoreCase = true) }
 
 android {
     namespace = "com.example.lanptt"
@@ -18,9 +37,29 @@ android {
         versionName = "1.0.0"
     }
 
+    signingConfigs {
+        create("release") {
+            val storeFilePath = keystoreProperties.getProperty("storeFile")
+            val storeFileProp = storeFilePath?.let { rootProject.file(it) }
+            if (storeFileProp != null && storeFileProp.exists()) {
+                storeFile = storeFileProp
+                storePassword = keystoreProperties.getProperty("storePassword")
+                keyAlias = keystoreProperties.getProperty("keyAlias")
+                keyPassword = keystoreProperties.getProperty("keyPassword")
+            } else if (releaseRequested) {
+                throw GradleException(
+                    "Release signing not configured: ${keystorePropertiesFile.invariantSeparatorsPath} " +
+                        "is missing or points at a keystore that does not exist. " +
+                        "See README.md \"Official release build\" for key setup."
+                )
+            }
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = false
+            signingConfig = signingConfigs.getByName("release")
         }
     }
 

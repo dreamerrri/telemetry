@@ -3,64 +3,59 @@
     android:height="108dp"
     android:viewportWidth="2048"
     android:viewportHeight="2048">
-    <!-- Telemetry icon (telemetry-icon.svg): mint mic + radio waves on transparent.
-         Background (#14262A) is supplied by @color/ic_launcher_background.
-         Group scales 2048px artwork by 0.8 about the center so strokes stay
-         inside the adaptive-icon safe zone (outer 18dp may be cropped). -->
+    <!-- Monochrome (themed-icon) variant of the Telemetry glyph. Single-color
+         white; the launcher tints it. Same geometry as ic_launcher_foreground. -->
     <group
         android:pivotX="1024"
         android:pivotY="1024"
         android:scaleX="0.8"
         android:scaleY="0.8">
-        <!-- microphone capsule -->
         <path
-            android:fillColor="#67DEBD"
+            android:fillColor="#FFFFFF"
             android:pathData="M840,818 V632 C840,525.3 926.3,439 1033,439 C1139.7,439 1226,525.3 1226,632 V818 Z" />
         <path
-            android:fillColor="#67DEBD"
+            android:fillColor="#FFFFFF"
             android:pathData="M840,875 H1226 V1070 C1226,1177.2 1139.7,1264 1033,1264 C926.3,1264 840,1177.2 840,1070 Z" />
-        <!-- microphone yoke and stand -->
         <path
             android:fillColor="#00000000"
-            android:strokeColor="#67DEBD"
+            android:strokeColor="#FFFFFF"
             android:strokeWidth="50"
             android:strokeLineCap="round"
             android:strokeLineJoin="round"
             android:pathData="M745,970 V1064 C745,1241.6 873.9,1386 1033,1386 C1192.1,1386 1321,1241.6 1321,1064 V970" />
         <path
             android:fillColor="#00000000"
-            android:strokeColor="#67DEBD"
+            android:strokeColor="#FFFFFF"
             android:strokeWidth="50"
             android:strokeLineCap="round"
             android:pathData="M1033,1386 V1577" />
         <path
             android:fillColor="#00000000"
-            android:strokeColor="#67DEBD"
+            android:strokeColor="#FFFFFF"
             android:strokeWidth="50"
             android:strokeLineCap="round"
             android:pathData="M834,1596 H1232" />
-        <!-- telemetry / radio waves -->
         <path
             android:fillColor="#00000000"
-            android:strokeColor="#67DEBD"
+            android:strokeColor="#FFFFFF"
             android:strokeWidth="50"
             android:strokeLineCap="round"
             android:pathData="M448,579 C271,776 271,1152 448,1349" />
         <path
             android:fillColor="#00000000"
-            android:strokeColor="#67DEBD"
+            android:strokeColor="#FFFFFF"
             android:strokeWidth="50"
             android:strokeLineCap="round"
             android:pathData="M586,718 C475,849 475,1078 586,1209" />
         <path
             android:fillColor="#00000000"
-            android:strokeColor="#67DEBD"
+            android:strokeColor="#FFFFFF"
             android:strokeWidth="50"
             android:strokeLineCap="round"
             android:pathData="M1618,579 C1795,776 1795,1152 1618,1349" />
         <path
             android:fillColor="#00000000"
-            android:strokeColor="#67DEBD"
+            android:strokeColor="#FFFFFF"
             android:strokeWidth="50"
             android:strokeLineCap="round"
             android:pathData="M1480,718 C1591,849 1591,1078 1480,1209" />
