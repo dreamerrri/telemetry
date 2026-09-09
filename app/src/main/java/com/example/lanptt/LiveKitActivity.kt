@@ -13,6 +13,9 @@ import android.view.KeyEvent
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.background
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -46,8 +49,8 @@ import com.example.lanptt.ui.talknet.ChatPeer
 import com.example.lanptt.ui.talknet.DefaultChannels
 import com.example.lanptt.ui.talknet.DirectDisabled
 import com.example.lanptt.ui.talknet.DirectPage
-import com.example.lanptt.ui.talknet.GearGlyph
 import com.example.lanptt.ui.talknet.HomeScreen
+import com.example.lanptt.ui.talknet.SettingsButton
 import com.example.lanptt.ui.talknet.JoinScreen
 import com.example.lanptt.ui.talknet.MainTab
 import com.example.lanptt.ui.talknet.MePeer
@@ -62,6 +65,8 @@ import com.example.lanptt.ui.talknet.TransportToggle
 import com.example.lanptt.ui.talknet.initialsFor
 import com.example.lanptt.ui.talknet.peerColorFor
 import com.example.lanptt.ui.talknet.peerColorForName
+import com.example.lanptt.ui.OnboardingFlow
+import com.example.lanptt.ui.OnboardingStep
 import com.example.lanptt.ui.theme.LanPttTheme
 import com.example.lanptt.ui.theme.TalkBorder
 import com.example.lanptt.ui.theme.TalkMint
@@ -104,6 +109,15 @@ class LiveKitActivity : ComponentActivity() {
     private var live by mutableStateOf(false)
     private var settingsOpen by mutableStateOf(false)
 
+    // First-launch onboarding
+    private var onboardingComplete by mutableStateOf(false)
+    private var onboardingStep by mutableStateOf(OnboardingStep.Welcome)
+
+    // Cached OS probe results (filled in onResume / before actions, never in composition).
+    private var micGranted by mutableStateOf(true)
+    private var notifGranted by mutableStateOf(true)
+    private var battExempt by mutableStateOf(false)
+
     /** Last-known cloud rosters per room, shown on Home cards. */
     private val rosterCache = mutableStateMapOf<String, List<ChatPeer>>()
 
@@ -127,25 +141,18 @@ class LiveKitActivity : ComponentActivity() {
             "quickTexts", "OK\nOn my way\nLoud and clear\nStand by\nYes\nNo"
         ) ?: ""
         ownIp = LanDiscovery.detectOwnIp()
+        onboardingComplete = prefs.getBoolean("onboarding_complete", false)
 
         volumeControlStream = AudioManager.STREAM_MUSIC
 
-        val need = mutableListOf<String>()
-        if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
-            need += Manifest.permission.RECORD_AUDIO
+        // Don't start the foreground service on a fresh install: on Android 14+
+        // a microphone-type FGS start without RECORD_AUDIO throws SecurityException
+        // and kills the process before onboarding can even run. The service starts
+        // (as playback-type, no permission needed) once onboarding completes —
+        // see completeOnboarding()/onResume() — or immediately for existing users.
+        if (onboardingComplete) {
+            startTelemetryService()
         }
-        if (Build.VERSION.SDK_INT >= 33 &&
-            checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
-        ) {
-            need += Manifest.permission.POST_NOTIFICATIONS
-        }
-        if (need.isNotEmpty()) requestPermissions(need.toTypedArray(), 1002)
-        maybeAskBattery()
-
-        startForegroundService(
-            TelemetryService.cmd(this, TelemetryService.ACTION_START)
-                .putExtra("name", lanName)
-        )
 
         lifecycleScope.launch {
             SessionState.cloudPeers.collect { list ->
@@ -190,12 +197,13 @@ class LiveKitActivity : ComponentActivity() {
                     }
                 }
 
-                Column(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .background(com.example.lanptt.ui.theme.TalkBg)
-                        .statusBarsPadding()
-                ) {
+                if (onboardingComplete) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .background(com.example.lanptt.ui.theme.TalkBg)
+                            .statusBarsPadding()
+                    ) {
                     // Header: brand + transport toggle.
                     Row(
                         modifier = Modifier
@@ -212,7 +220,7 @@ class LiveKitActivity : ComponentActivity() {
                         }
                         TransportToggle(transport = transport, onTransport = { switchTransport(it) })
                         Spacer(Modifier.width(8.dp))
-                        GearGlyph(onClick = { settingsOpen = !settingsOpen })
+                        SettingsButton(onClick = { settingsOpen = !settingsOpen })
                     }
                     Box(
                         Modifier
@@ -221,7 +229,7 @@ class LiveKitActivity : ComponentActivity() {
                             .background(TalkBorder)
                     )
 
-                    // Pages.
+                    // Pages: swipeable Direct ↔ Rooms; BottomNav button still switches.
                     Box(modifier = Modifier.weight(1f)) {
                         if (settingsOpen) {
                             SettingsPage(
@@ -250,8 +258,23 @@ class LiveKitActivity : ComponentActivity() {
                                 ownIp = ownIp,
                                 onBack = { settingsOpen = false }
                             )
-                        } else when (tab) {
-                            MainTab.Direct -> {
+                        } else {
+                            // Swipeable pages: Direct (0) ↔ Rooms (1); BottomNav button still switches.
+                            val pagerState = rememberPagerState(pageCount = { 2 })
+                            LaunchedEffect(tab) {
+                                if (pagerState.currentPage != tab.ordinal && !pagerState.isScrollInProgress) {
+                                    pagerState.animateScrollToPage(tab.ordinal)
+                                }
+                            }
+                            LaunchedEffect(pagerState.currentPage) {
+                                switchTab(MainTab.entries[pagerState.currentPage])
+                            }
+                            HorizontalPager(
+                                state = pagerState,
+                                modifier = Modifier.fillMaxSize()
+                            ) { page ->
+                                when (MainTab.entries[page]) {
+                                    MainTab.Direct -> {
                                 if (transport == Transport.LAN) {
                                     if (directPhase == TalkState.Talk) {
                                         val directPeer = nearby.values.firstOrNull { it.ip == lanPeerIp }
@@ -416,10 +439,36 @@ class LiveKitActivity : ComponentActivity() {
                                     }
                                 }
                             }
+                                }
+                            }
                         }
                     }
 
                     BottomNav(tab = tab, onTab = { switchTab(it) })
+                    }
+                } else {
+                    OnboardingFlow(
+                        step = onboardingStep,
+                        neededMic = !micGranted,
+                        neededNotifications = !notifGranted,
+                        batteryExempt = battExempt,
+                        onStart = { onboardingStep = OnboardingStep.Permissions },
+                        onPermContinue = {
+                            refreshPermissionState()
+                            requestPendingPermissions()
+                            onboardingStep = OnboardingStep.Battery
+                        },
+                        onEnableBattery = {
+                            requestBatteryExemption()
+                            onboardingStep = OnboardingStep.Done
+                        },
+                        onSkipBattery = {
+                            refreshPermissionState()
+                            onboardingStep = OnboardingStep.Done
+                        },
+                        onFinish = { completeOnboarding() },
+                        onSkipAll = { completeOnboarding() }
+                    )
                 }
             }
         }
@@ -671,6 +720,13 @@ class LiveKitActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         ownIp = LanDiscovery.detectOwnIp()
+        refreshPermissionState()
+        // Existing installs / returning users: make sure the service is up even if
+        // this process was recreated. Fresh installs skip this until onboarding
+        // completes (completeOnboarding starts it).
+        if (onboardingComplete) {
+            startTelemetryService()
+        }
     }
 
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<String>, grantResults: IntArray) {
@@ -682,21 +738,85 @@ class LiveKitActivity : ComponentActivity() {
         }
     }
 
-    private fun maybeAskBattery() {
-        val prefs = getSharedPreferences("lk", MODE_PRIVATE)
-        if (prefs.getBoolean("battAsked", false)) return
+    // ── First-launch onboarding helpers ──────────────────────
+
+    /**
+     * Re-read the OS permission / battery state into the cached fields. Guarded with
+     * catch(Throwable) so no probe (especially PowerManager, absent on some devices /
+     * emulators) can throw out of composition and crash the activity. Safe defaults:
+     * permissions assumed granted, battery assumed not exempt. Called from onResume and
+     * from tap handlers — never from inside setContent.
+     */
+    private fun refreshPermissionState() {
+        micGranted = try {
+            checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
+        } catch (_: Throwable) { true }
+        notifGranted = try {
+            Build.VERSION.SDK_INT < 33 ||
+                checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
+        } catch (_: Throwable) { true }
+        val exempt = try {
+            val pm = getSystemService(PowerManager::class.java)
+            pm.isIgnoringBatteryOptimizations(packageName)
+        } catch (_: Throwable) { false }
+        battExempt = exempt == true
+    }
+
+    /** Ask for whatever required permissions the user hasn't granted yet (mic first). */
+    private fun requestPendingPermissions() {
+        refreshPermissionState()
+        val need = buildList {
+            if (!micGranted) add(Manifest.permission.RECORD_AUDIO)
+            if (!notifGranted) add(Manifest.permission.POST_NOTIFICATIONS)
+        }
+        if (need.isNotEmpty()) {
+            requestPermissions(need.toTypedArray(), 1002)
+        }
+    }
+
+    /**
+     * Open the battery-optimization exemption for this package. Uses the in-app native
+     * "Allow to run in background?" dialog when available (keeps this activity alive),
+     * otherwise falls back to the battery-optimization list in Settings.
+     */
+    private fun requestBatteryExemption() {
         try {
             val pm = getSystemService(PowerManager::class.java)
-            if (!pm.isIgnoringBatteryOptimizations(packageName)) {
-                startActivity(
-                    Intent(
-                        Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
-                        Uri.parse("package:$packageName")
-                    )
-                )
-            }
-        } catch (_: Exception) { }
-        prefs.edit().putBoolean("battAsked", true).apply()
+            if (pm.isIgnoringBatteryOptimizations(packageName)) return
+            startActivity(
+                Intent(
+                    Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
+                    Uri.parse("package:$packageName")
+                ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            )
+        } catch (_: Throwable) {
+            try {
+                startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
+            } catch (_: Throwable) { }
+        }
+    }
+
+    private fun completeOnboarding() {
+        onboardingComplete = true
+        getSharedPreferences("lk", MODE_PRIVATE)
+            .edit().putBoolean("onboarding_complete", true).apply()
+        // Safe now: the service idles as a playback-type FGS (no mic permission
+        // needed); it only touches the microphone type while transmitting.
+        startTelemetryService()
+    }
+
+    /**
+     * Idempotent service start. ACTION_START re-entry is already guarded inside
+     * the service (startLanRx / Discovery.start no-op when running). Guarded
+     * against background-start restrictions (API 31+) so it can never crash.
+     */
+    private fun startTelemetryService() {
+        try {
+            startForegroundService(
+                TelemetryService.cmd(this, TelemetryService.ACTION_START)
+                    .putExtra("name", lanName)
+            )
+        } catch (_: Throwable) { }
     }
 }
 

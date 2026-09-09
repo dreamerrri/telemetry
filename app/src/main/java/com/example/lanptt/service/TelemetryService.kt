@@ -6,11 +6,20 @@ import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
 import android.content.Intent
+import android.content.pm.PackageManager
+import android.content.pm.ServiceInfo
+import android.os.Build
 import android.media.AudioAttributes
+import android.media.AudioFocusRequest
 import android.media.AudioFormat
+import android.media.AudioManager
 import android.media.AudioRecord
 import android.media.AudioTrack
 import android.media.MediaRecorder
+import android.media.audiofx.AcousticEchoCanceler
+import android.media.audiofx.AudioEffect
+import android.media.audiofx.AutomaticGainControl
+import android.media.audiofx.NoiseSuppressor
 import android.os.BatteryManager
 import android.os.IBinder
 import com.example.lanptt.LiveKitActivity
@@ -74,6 +83,10 @@ class TelemetryService : Service() {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
 
+    // Audio focus: held for the service's lifetime so other apps can't steal
+    // the speaker mid-talk (music resumes when the user hits Stop).
+    private var focusRequest: AudioFocusRequest? = null
+
     // LAN
     @Volatile private var receiving = false
     @Volatile private var lanTx = false
@@ -89,7 +102,12 @@ class TelemetryService : Service() {
     override fun onCreate() {
         super.onCreate()
         createChannel()
-        startForeground(NOTIF_ID, buildNotif())
+        // Idle/listen state uses the mediaPlayback type (no runtime permission needed).
+        // The microphone type is escalated only while actually transmitting — see
+        // escalateToMic()/dropToIdle() — because Android 14+ throws SecurityException
+        // for a microphone FGS when RECORD_AUDIO is not yet granted (fresh install).
+        startForegroundIdle()
+        holdAudioFocus()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -155,6 +173,7 @@ class TelemetryService : Service() {
     override fun onDestroy() {
         receiving = false
         lanTx = false
+        abandonAudioFocus()
         try { rxSocket?.close() } catch (_: Exception) {}
         LanDiscovery.stop()
         scope.launch {
@@ -169,6 +188,94 @@ class TelemetryService : Service() {
             getSystemService(BatteryManager::class.java)
                 .getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY)
         } catch (_: Exception) { -1 }
+    }
+
+    /* ─── Foreground service type management (Android 14+ crash fix) ─── */
+
+    /** (Re)enter foreground as mediaPlayback: safe with zero runtime permissions. */
+    private fun startForegroundIdle() {
+        try {
+            if (Build.VERSION.SDK_INT >= 29) {
+                startForeground(
+                    NOTIF_ID, buildNotif(),
+                    ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK
+                )
+            } else {
+                startForeground(NOTIF_ID, buildNotif())
+            }
+        } catch (e: Exception) {
+            SessionState.lanStatus.value = "Foreground start failed: ${e.message}"
+        }
+    }
+
+    /**
+     * Escalate to the microphone type while capturing mic audio. Callers must
+     * already hold RECORD_AUDIO (all transmit paths return early without it), so
+     * this cannot throw the API-34 SecurityException a fresh-install start did.
+     */
+    private fun escalateToMic() {
+        if (!hasMicPermission()) return
+        try {
+            if (Build.VERSION.SDK_INT >= 29) {
+                startForeground(
+                    NOTIF_ID, buildNotif(),
+                    ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
+                )
+            } else {
+                startForeground(NOTIF_ID, buildNotif())
+            }
+        } catch (e: Exception) {
+            SessionState.lanStatus.value = "Mic foreground failed: ${e.message}"
+        }
+    }
+
+    /** Drop back to the idle (playback) type when transmission ends. Never throws. */
+    private fun dropToIdle() {
+        try {
+            startForegroundIdle()
+        } catch (_: Exception) { }
+    }
+
+    private fun hasMicPermission(): Boolean = try {
+        checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) ==
+            PackageManager.PERMISSION_GRANTED
+    } catch (_: Throwable) { false }
+
+    /* ─── Audio focus ──────────────────────────────────── */
+
+    private fun holdAudioFocus() {
+        if (focusRequest != null) return
+        val am = getSystemService(AudioManager::class.java) ?: return
+        val req = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN)
+            .setAudioAttributes(
+                AudioAttributes.Builder()
+                    .setUsage(AudioAttributes.USAGE_MEDIA)
+                    .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                    .build()
+            )
+            .setOnAudioFocusChangeListener { }
+            .build()
+        focusRequest = req
+        try { am.requestAudioFocus(req) } catch (_: Exception) { }
+    }
+
+    private fun abandonAudioFocus() {
+        val req = focusRequest ?: return
+        focusRequest = null
+        try {
+            getSystemService(AudioManager::class.java)?.abandonAudioFocusRequest(req)
+        } catch (_: Exception) { }
+    }
+
+    /** Blocking AudioTrack write; negative result = device-level error. */
+    private fun writePcm(track: AudioTrack, data: ByteArray, off: Int, len: Int): Boolean {
+        if (len <= 0) return true
+        val w = track.write(data, off, len)
+        if (w < 0) {
+            SessionState.lanStatus.value = "Playback error ($w)"
+            return false
+        }
+        return true
     }
 
     /* ─── LAN ──────────────────────────────────────────── */
@@ -200,6 +307,11 @@ class TelemetryService : Service() {
                     .setBufferSizeInBytes(minBuf * 4)
                     .setTransferMode(AudioTrack.MODE_STREAM)
                     .build()
+                if (track.state != AudioTrack.STATE_INITIALIZED) {
+                    track.release()
+                    SessionState.lanStatus.value = "Listen failed: audio output unavailable"
+                    return@Thread
+                }
                 track.play()
 
                 rxSocket = DatagramSocket(LAN_PORT).apply { broadcast = true }
@@ -218,14 +330,14 @@ class TelemetryService : Service() {
                             if (tagged != null) {
                                 val (room, offset) = tagged
                                 if (room == SessionState.lanRoom.value && room.isNotEmpty()) {
-                                    track.write(pkt.data, offset, pkt.length - offset)
+                                    writePcm(track, pkt.data, offset, pkt.length - offset)
                                     SessionState.lanStatus.value =
                                         "Room '$room' · ${pkt.address.hostAddress}..."
                                 }
                                 continue
                             }
                             // Legacy untagged: direct dial.
-                            track.write(pkt.data, 0, pkt.length)
+                            writePcm(track, pkt.data, 0, pkt.length)
                             SessionState.lanStatus.value =
                                 "Receiving ${pkt.length}B from ${pkt.address.hostAddress}..."
                         }
@@ -259,6 +371,12 @@ class TelemetryService : Service() {
 
     private fun startLanTalk(peerIp: String, room: String) {
         if (lanTx) return
+        // Mic capture requires RECORD_AUDIO; without it escalateToMic() would be a
+        // no-op anyway and AudioRecord would fail — bail out early with a status.
+        if (!hasMicPermission()) {
+            SessionState.lanStatus.value = "Mic permission needed to talk."
+            return
+        }
         val roomMode = room.trim().take(64).isNotEmpty()
         val peer: InetAddress? = if (roomMode) {
             null
@@ -281,11 +399,13 @@ class TelemetryService : Service() {
         } else {
             "Talking -> ${peerIp.trim()}..."
         }
+        escalateToMic()
         refreshNotif()
 
         Thread({
             var rec: AudioRecord? = null
             var sock: DatagramSocket? = null
+            var fx: List<AudioEffect> = emptyList()
             try {
                 val minBuf = AudioRecord.getMinBufferSize(
                     SAMPLE_RATE,
@@ -299,6 +419,28 @@ class TelemetryService : Service() {
                     AudioFormat.ENCODING_PCM_16BIT,
                     minBuf * 2
                 )
+                // Voice processing: echo cancellation + noise suppression + AGC
+                // where the device supports them (speakerphone echo on LAN PTT).
+                val effects = ArrayList<AudioEffect>(3)
+                try {
+                    if (AcousticEchoCanceler.isAvailable()) {
+                        AcousticEchoCanceler.create(rec.audioSessionId)?.let { effects.add(it) }
+                    }
+                } catch (_: Exception) { }
+                try {
+                    if (NoiseSuppressor.isAvailable()) {
+                        NoiseSuppressor.create(rec.audioSessionId)?.let { effects.add(it) }
+                    }
+                } catch (_: Exception) { }
+                try {
+                    if (AutomaticGainControl.isAvailable()) {
+                        AutomaticGainControl.create(rec.audioSessionId)?.let { effects.add(it) }
+                    }
+                } catch (_: Exception) { }
+                for (e in effects) {
+                    try { e.enabled = true } catch (_: Exception) { }
+                }
+                fx = effects
                 sock = DatagramSocket().apply { broadcast = true }
                 rec.startRecording()
                 val buf = ByteArray(1024)
@@ -325,6 +467,7 @@ class TelemetryService : Service() {
                 try { rec?.stop() } catch (_: Exception) {}
                 try { rec?.release() } catch (_: Exception) {}
                 try { sock?.close() } catch (_: Exception) {}
+                fx.forEach { try { it.release() } catch (_: Exception) { } }
             }
         }, "ptt-tx").start()
     }
@@ -334,6 +477,7 @@ class TelemetryService : Service() {
         lanTx = false
         SessionState.lanTransmitting.value = false
         SessionState.lanStatus.value = "Ready. Enter peer IP, hold to talk."
+        dropToIdle()
         refreshNotif()
     }
 
@@ -353,7 +497,7 @@ class TelemetryService : Service() {
             val clean = text.trim().take(280)
             if (clean.isEmpty()) return true
             SessionState.lanTexts.value =
-                (SessionState.lanTexts.value + TextMsg(from, clean, room = room)).takeLast(5)
+                (SessionState.lanTexts.value + TextMsg(from, clean, room = room)).takeLast(60)
             true
         } catch (_: Exception) {
             false
@@ -383,7 +527,7 @@ class TelemetryService : Service() {
                     }
                 }
                 SessionState.lanTexts.value =
-                    (SessionState.lanTexts.value + TextMsg("You", clean, room = room.trim())).takeLast(5)
+                    (SessionState.lanTexts.value + TextMsg("You", clean, room = room.trim())).takeLast(60)
             } catch (e: Exception) {
                 SessionState.lanStatus.value = "Text failed: ${e.message}"
             }
@@ -463,7 +607,7 @@ class TelemetryService : Service() {
                         val id = event.participant?.identity?.value ?: "?"
                         val sender = SessionState.cloudPeers.value.firstOrNull { it.id == id }?.name ?: id
                         SessionState.cloudTexts.value =
-                            (SessionState.cloudTexts.value + TextMsg(sender, text)).takeLast(5)
+                            (SessionState.cloudTexts.value + TextMsg(sender, text)).takeLast(60)
                     }
                 }
                 is RoomEvent.Disconnected -> {
@@ -491,15 +635,23 @@ class TelemetryService : Service() {
             try {
                 r.localParticipant?.publishData("CHAT|$clean".toByteArray())
                 SessionState.cloudTexts.value =
-                    (SessionState.cloudTexts.value + TextMsg("You", clean)).takeLast(5)
+                    (SessionState.cloudTexts.value + TextMsg("You", clean)).takeLast(60)
             } catch (e: Exception) {
                 SessionState.cloudError.value = "Text failed: ${e.message}"
             }
         }
     }
 
-    private fun setMicTalking(want: Boolean) {        val r = room ?: return
+    private fun setMicTalking(want: Boolean) {
+        val r = room ?: return
         if (!SessionState.cloudConnected.value) return
+        if (want && !hasMicPermission()) {
+            SessionState.cloudError.value = "Mic permission needed to talk."
+            return
+        }
+        // Escalate to the microphone FGS type while publishing mic audio, drop
+        // back when muted — mic permission is guaranteed here (checked above).
+        if (want) escalateToMic() else dropToIdle()
         scope.launch {
             try {
                 r.localParticipant?.setMicrophoneEnabled(want)
@@ -525,6 +677,8 @@ class TelemetryService : Service() {
             try { room?.disconnect() } catch (_: Exception) {}
             room = null
         }
+        // Return to the idle type whenever a cloud session ends.
+        dropToIdle()
         refreshNotif()
     }
 
