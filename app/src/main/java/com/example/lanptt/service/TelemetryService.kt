@@ -6,6 +6,9 @@ import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
 import android.content.Intent
+import android.content.pm.PackageManager
+import android.content.pm.ServiceInfo
+import android.os.Build
 import android.media.AudioAttributes
 import android.media.AudioFocusRequest
 import android.media.AudioFormat
@@ -99,7 +102,11 @@ class TelemetryService : Service() {
     override fun onCreate() {
         super.onCreate()
         createChannel()
-        startForeground(NOTIF_ID, buildNotif())
+        // Idle/listen state uses the mediaPlayback type (no runtime permission needed).
+        // The microphone type is escalated only while actually transmitting — see
+        // escalateToMic()/dropToIdle() — because Android 14+ throws SecurityException
+        // for a microphone FGS when RECORD_AUDIO is not yet granted (fresh install).
+        startForegroundIdle()
         holdAudioFocus()
     }
 
@@ -182,6 +189,57 @@ class TelemetryService : Service() {
                 .getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY)
         } catch (_: Exception) { -1 }
     }
+
+    /* ─── Foreground service type management (Android 14+ crash fix) ─── */
+
+    /** (Re)enter foreground as mediaPlayback: safe with zero runtime permissions. */
+    private fun startForegroundIdle() {
+        try {
+            if (Build.VERSION.SDK_INT >= 29) {
+                startForeground(
+                    NOTIF_ID, buildNotif(),
+                    ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK
+                )
+            } else {
+                startForeground(NOTIF_ID, buildNotif())
+            }
+        } catch (e: Exception) {
+            SessionState.lanStatus.value = "Foreground start failed: ${e.message}"
+        }
+    }
+
+    /**
+     * Escalate to the microphone type while capturing mic audio. Callers must
+     * already hold RECORD_AUDIO (all transmit paths return early without it), so
+     * this cannot throw the API-34 SecurityException a fresh-install start did.
+     */
+    private fun escalateToMic() {
+        if (!hasMicPermission()) return
+        try {
+            if (Build.VERSION.SDK_INT >= 29) {
+                startForeground(
+                    NOTIF_ID, buildNotif(),
+                    ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
+                )
+            } else {
+                startForeground(NOTIF_ID, buildNotif())
+            }
+        } catch (e: Exception) {
+            SessionState.lanStatus.value = "Mic foreground failed: ${e.message}"
+        }
+    }
+
+    /** Drop back to the idle (playback) type when transmission ends. Never throws. */
+    private fun dropToIdle() {
+        try {
+            startForegroundIdle()
+        } catch (_: Exception) { }
+    }
+
+    private fun hasMicPermission(): Boolean = try {
+        checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) ==
+            PackageManager.PERMISSION_GRANTED
+    } catch (_: Throwable) { false }
 
     /* ─── Audio focus ──────────────────────────────────── */
 
@@ -313,6 +371,12 @@ class TelemetryService : Service() {
 
     private fun startLanTalk(peerIp: String, room: String) {
         if (lanTx) return
+        // Mic capture requires RECORD_AUDIO; without it escalateToMic() would be a
+        // no-op anyway and AudioRecord would fail — bail out early with a status.
+        if (!hasMicPermission()) {
+            SessionState.lanStatus.value = "Mic permission needed to talk."
+            return
+        }
         val roomMode = room.trim().take(64).isNotEmpty()
         val peer: InetAddress? = if (roomMode) {
             null
@@ -335,6 +399,7 @@ class TelemetryService : Service() {
         } else {
             "Talking -> ${peerIp.trim()}..."
         }
+        escalateToMic()
         refreshNotif()
 
         Thread({
@@ -412,6 +477,7 @@ class TelemetryService : Service() {
         lanTx = false
         SessionState.lanTransmitting.value = false
         SessionState.lanStatus.value = "Ready. Enter peer IP, hold to talk."
+        dropToIdle()
         refreshNotif()
     }
 
@@ -579,6 +645,13 @@ class TelemetryService : Service() {
     private fun setMicTalking(want: Boolean) {
         val r = room ?: return
         if (!SessionState.cloudConnected.value) return
+        if (want && !hasMicPermission()) {
+            SessionState.cloudError.value = "Mic permission needed to talk."
+            return
+        }
+        // Escalate to the microphone FGS type while publishing mic audio, drop
+        // back when muted — mic permission is guaranteed here (checked above).
+        if (want) escalateToMic() else dropToIdle()
         scope.launch {
             try {
                 r.localParticipant?.setMicrophoneEnabled(want)
@@ -604,6 +677,8 @@ class TelemetryService : Service() {
             try { room?.disconnect() } catch (_: Exception) {}
             room = null
         }
+        // Return to the idle type whenever a cloud session ends.
+        dropToIdle()
         refreshNotif()
     }
 

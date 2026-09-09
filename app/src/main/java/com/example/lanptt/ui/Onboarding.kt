@@ -17,6 +17,16 @@ import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Mic
+import androidx.compose.material.icons.filled.Notifications
+import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButtonDefaults
+import androidx.compose.material3.FilledTonalIconButton
+import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material3.ProgressIndicatorDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -26,9 +36,11 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.lanptt.ui.talknet.TalkPrimaryButton
+import com.example.lanptt.ui.talknet.TalkSecondaryButton
 import com.example.lanptt.ui.theme.TalkBg
 import com.example.lanptt.ui.theme.TalkBorder
 import com.example.lanptt.ui.theme.TalkCard
+import com.example.lanptt.ui.theme.TalkCard2
 import com.example.lanptt.ui.theme.TalkMint
 import com.example.lanptt.ui.theme.TalkMuted
 import com.example.lanptt.ui.theme.TalkText
@@ -39,7 +51,8 @@ enum class OnboardingStep { Welcome, Permissions, Battery, Done }
 
 private data class OnboardingPerm(
     val title: String,
-    val reason: String
+    val reason: String,
+    val icon: androidx.compose.ui.graphics.vector.ImageVector
 )
 
 /**
@@ -73,7 +86,7 @@ fun OnboardingFlow(
     ) {
         val total = 4
         val current = step.ordinal + 1
-        // Top bar: brand + progress dots + step label.
+        // Top bar: brand + M3 Expressive linear progress (wavy-capable track) + step label.
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -88,17 +101,21 @@ fun OnboardingFlow(
                 letterSpacing = 0.5.sp
             )
             Spacer(Modifier.weight(1f))
-            (0 until total).forEach { i ->
-                Box(
-                    Modifier
-                        .size(if (i == step.ordinal) 10.dp else 7.dp)
-                        .background(if (i <= step.ordinal) TalkMint else TalkMuted, CircleShape)
-                )
-                Spacer(Modifier.width(5.dp))
-            }
-            Spacer(Modifier.width(2.dp))
             Text("$current / $total", color = TalkTextDim, fontSize = 12.sp)
         }
+        LinearProgressIndicator(
+            progress = { current / total.toFloat() },
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp)
+                .height(8.dp),
+            color = TalkMint,
+            trackColor = TalkCard2,
+            strokeCap = ProgressIndicatorDefaults.LinearStrokeCap,
+            gapSize = 2.dp,
+            drawStopIndicator = {}
+        )
+        Spacer(Modifier.height(16.dp))
 
         Box(Modifier.fillMaxWidth().height(1.dp).background(TalkBorder))
 
@@ -135,14 +152,10 @@ fun OnboardingFlow(
                             modifier = Modifier.fillMaxWidth()
                         )
                         Spacer(Modifier.height(6.dp))
-                        Text(
-                            "Skip setup for now →",
-                            color = TalkTextDim,
-                            fontSize = 13.sp,
-                            modifier = Modifier
-                                .align(Alignment.CenterHorizontally)
-                                .padding(top = 4.dp)
-                                .clickable(onClick = onSkipAll)
+                        TalkSecondaryButton(
+                            text = "Skip setup for now →",
+                            onClick = onSkipAll,
+                            modifier = Modifier.fillMaxWidth()
                         )
                     }
                 OnboardingStep.Permissions -> TalkPrimaryButton(
@@ -165,14 +178,10 @@ fun OnboardingFlow(
                                 modifier = Modifier.fillMaxWidth()
                             )
                             Spacer(Modifier.height(6.dp))
-                            Text(
-                                "or skip for now →",
-                                color = TalkTextDim,
-                                fontSize = 13.sp,
-                                modifier = Modifier
-                                    .align(Alignment.CenterHorizontally)
-                                    .padding(top = 4.dp)
-                                    .clickable(onClick = onSkipBattery)
+                            TalkSecondaryButton(
+                                text = "or skip for now →",
+                                onClick = onSkipBattery,
+                                modifier = Modifier.fillMaxWidth()
                             )
                         }
                     }
@@ -194,22 +203,34 @@ private fun Title(text: String, subtitle: String? = null) {
     }
 }
 
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 private fun PermRow(perm: OnboardingPerm) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .background(TalkCard)
-            .border(1.dp, TalkBorder, RoundedCornerShape(14.dp))
-            .padding(14.dp)
+            .border(1.dp, TalkBorder, RoundedCornerShape(20.dp))
+            .padding(14.dp),
+        verticalAlignment = Alignment.CenterVertically
     ) {
-        Box(
-            Modifier
-                .size(26.dp)
-                .background(TalkMint, CircleShape),
-            contentAlignment = Alignment.Center
+        // M3 Expressive tonal icon button as the permission glyph.
+        FilledTonalIconButton(
+            onClick = {},
+            enabled = false,
+            colors = IconButtonDefaults.filledTonalIconButtonColors(
+                containerColor = TalkMint,
+                contentColor = TalkBg,
+                disabledContainerColor = TalkMint,
+                disabledContentColor = TalkBg
+            ),
+            modifier = Modifier.size(44.dp)
         ) {
-            Text("i", color = TalkBg, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+            Icon(
+                imageVector = perm.icon,
+                contentDescription = null,
+                modifier = Modifier.size(22.dp)
+            )
         }
         Spacer(Modifier.width(12.dp))
         Column(modifier = Modifier.weight(1f)) {
@@ -250,7 +271,8 @@ private fun PermissionsBody(neededMic: Boolean, neededNotifications: Boolean) {
                 OnboardingPerm(
                     "Microphone",
                     "We need the Microphone to send your voice on the radio. " +
-                        "Audio only goes to the channels you join."
+                        "Audio only goes to the channels you join.",
+                    Icons.Filled.Mic
                 )
             )
         }
@@ -259,7 +281,8 @@ private fun PermissionsBody(neededMic: Boolean, neededNotifications: Boolean) {
                 OnboardingPerm(
                     "Notifications",
                     "We need Notifications so incoming calls can still ring you " +
-                        "while the app is in the background."
+                        "while the app is in the background.",
+                    Icons.Filled.Notifications
                 )
             )
         }

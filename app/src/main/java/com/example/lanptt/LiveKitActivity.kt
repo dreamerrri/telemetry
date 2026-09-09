@@ -145,10 +145,14 @@ class LiveKitActivity : ComponentActivity() {
 
         volumeControlStream = AudioManager.STREAM_MUSIC
 
-        startForegroundService(
-            TelemetryService.cmd(this, TelemetryService.ACTION_START)
-                .putExtra("name", lanName)
-        )
+        // Don't start the foreground service on a fresh install: on Android 14+
+        // a microphone-type FGS start without RECORD_AUDIO throws SecurityException
+        // and kills the process before onboarding can even run. The service starts
+        // (as playback-type, no permission needed) once onboarding completes —
+        // see completeOnboarding()/onResume() — or immediately for existing users.
+        if (onboardingComplete) {
+            startTelemetryService()
+        }
 
         lifecycleScope.launch {
             SessionState.cloudPeers.collect { list ->
@@ -717,6 +721,12 @@ class LiveKitActivity : ComponentActivity() {
         super.onResume()
         ownIp = LanDiscovery.detectOwnIp()
         refreshPermissionState()
+        // Existing installs / returning users: make sure the service is up even if
+        // this process was recreated. Fresh installs skip this until onboarding
+        // completes (completeOnboarding starts it).
+        if (onboardingComplete) {
+            startTelemetryService()
+        }
     }
 
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<String>, grantResults: IntArray) {
@@ -790,6 +800,23 @@ class LiveKitActivity : ComponentActivity() {
         onboardingComplete = true
         getSharedPreferences("lk", MODE_PRIVATE)
             .edit().putBoolean("onboarding_complete", true).apply()
+        // Safe now: the service idles as a playback-type FGS (no mic permission
+        // needed); it only touches the microphone type while transmitting.
+        startTelemetryService()
+    }
+
+    /**
+     * Idempotent service start. ACTION_START re-entry is already guarded inside
+     * the service (startLanRx / Discovery.start no-op when running). Guarded
+     * against background-start restrictions (API 31+) so it can never crash.
+     */
+    private fun startTelemetryService() {
+        try {
+            startForegroundService(
+                TelemetryService.cmd(this, TelemetryService.ACTION_START)
+                    .putExtra("name", lanName)
+            )
+        } catch (_: Throwable) { }
     }
 }
 

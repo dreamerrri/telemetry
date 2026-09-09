@@ -1,6 +1,8 @@
 package com.example.lanptt.ui.talknet
 
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -29,7 +31,29 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.ExpandLess
+import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.filled.People
+import androidx.compose.material.icons.filled.Wifi
+import androidx.compose.material.icons.outlined.Home
+import androidx.compose.material.icons.outlined.People
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
+import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.NavigationBar
+import androidx.compose.material3.NavigationBarItem
+import androidx.compose.material3.NavigationBarItemDefaults
+import androidx.compose.material3.RadioButton
+import androidx.compose.material3.RadioButtonDefaults
+import androidx.compose.material3.SegmentedButton
+import androidx.compose.material3.SegmentedButtonDefaults
+import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
@@ -45,12 +69,8 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.geometry.CornerRadius
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.Dp
@@ -78,33 +98,37 @@ enum class TalkState { Setup, Talk }
 enum class MainTab { Direct, Rooms }
 enum class Transport { LAN, CLOUD }
 
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 fun TransportToggle(
     transport: Transport,
     onTransport: (Transport) -> Unit,
     modifier: Modifier = Modifier
 ) {
-    Row(
-        modifier = modifier
-            .clip(RoundedCornerShape(10.dp))
-            .background(TalkCard)
-            .border(1.dp, TalkBorder, RoundedCornerShape(10.dp))
-            .padding(3.dp),
-        horizontalArrangement = Arrangement.spacedBy(3.dp)
-    ) {
-        Transport.entries.forEach { t ->
+    // M3 Expressive segmented control: single-choice row, TalkNet mint active
+    // state, expressive motion comes from the theme's motionScheme.
+    SingleChoiceSegmentedButtonRow(modifier = modifier) {
+        Transport.entries.forEachIndexed { i, t ->
             val sel = transport == t
-            Box(
-                contentAlignment = Alignment.Center,
-                modifier = Modifier
-                    .clip(RoundedCornerShape(7.dp))
-                    .background(if (sel) TalkMint else TalkCard)
-                    .quietClickable { onTransport(t) }
-                    .padding(horizontal = 12.dp, vertical = 6.dp)
+            SegmentedButton(
+                selected = sel,
+                onClick = { onTransport(t) },
+                shape = SegmentedButtonDefaults.itemShape(
+                    index = i,
+                    count = Transport.entries.size
+                ),
+                colors = SegmentedButtonDefaults.colors(
+                    activeContainerColor = TalkMint,
+                    activeContentColor = TalkBg,
+                    inactiveContainerColor = TalkCard2,
+                    inactiveContentColor = TalkTextDim
+                ),
+                border = SegmentedButtonDefaults.borderStroke(
+                    color = TalkBorder
+                )
             ) {
                 Text(
                     t.name,
-                    color = if (sel) TalkBg else TalkTextDim,
                     fontSize = 12.sp,
                     fontWeight = FontWeight.Bold,
                     letterSpacing = 1.sp
@@ -114,44 +138,51 @@ fun TransportToggle(
     }
 }
 
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 fun BottomNav(
     tab: MainTab,
     onTab: (MainTab) -> Unit,
     modifier: Modifier = Modifier
 ) {
-    Column(modifier = modifier.fillMaxWidth()) {
-        Box(
-            Modifier
-                .fillMaxWidth()
-                .height(1.dp)
-                .background(TalkBorder)
-        )
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 8.dp)
-        ) {
-            MainTab.entries.forEach { t ->
-                val sel = tab == t
-                Column(
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    modifier = Modifier
-                        .weight(1f)
-                        .clip(RoundedCornerShape(16.dp))
-                        .background(if (sel) TalkCard2 else Color.Transparent)
-                        .quietClickable { onTab(t) }
-                        .padding(vertical = 10.dp)
-                ) {
+    // M3 Expressive NavigationBar: animated indicator pill + icon morph, mapped
+    // onto the TalkNet palette (mint indicator, dim unselected, TalkNet surface).
+    NavigationBar(
+        modifier = modifier.fillMaxWidth(),
+        containerColor = TalkBg,
+        contentColor = TalkText
+    ) {
+        MainTab.entries.forEach { t ->
+            val sel = tab == t
+            NavigationBarItem(
+                selected = sel,
+                onClick = { onTab(t) },
+                icon = {
+                    Icon(
+                        imageVector = if (sel) {
+                            if (t == MainTab.Direct) Icons.Filled.Home else Icons.Filled.People
+                        } else {
+                            if (t == MainTab.Direct) Icons.Outlined.Home else Icons.Outlined.People
+                        },
+                        contentDescription = null
+                    )
+                },
+                label = {
                     Text(
                         t.name.uppercase(),
-                        color = if (sel) TalkMint else TalkMuted,
                         fontSize = 11.sp,
                         fontWeight = FontWeight.Bold,
                         letterSpacing = 1.2.sp
                     )
-                }
-            }
+                },
+                colors = NavigationBarItemDefaults.colors(
+                    selectedIconColor = TalkBg,
+                    selectedTextColor = TalkMint,
+                    unselectedIconColor = TalkMuted,
+                    unselectedTextColor = TalkMuted,
+                    indicatorColor = TalkMint
+                )
+            )
         }
     }
 }
@@ -171,29 +202,7 @@ val DefaultChannels = listOf(
     TalkChannel("security", "Security")
 )
 
-/* ─── Radio glyph ───────────────────────────────────────── */
-
-@Composable
-fun RadioIcon(active: Boolean, modifier: Modifier = Modifier) {
-    val c = if (active) TalkMint else TalkMuted
-    Canvas(modifier.size(20.dp)) {
-        val w = size.width
-        val h = size.height
-        drawRoundRect(
-            color = c,
-            topLeft = Offset(w * 0.3f, h * 0.15f),
-            size = Size(w * 0.4f, h * 0.55f),
-            cornerRadius = CornerRadius(4f, 4f),
-            style = Stroke(width = 3f)
-        )
-        drawRect(color = c, topLeft = Offset(w * 0.425f, h * 0.05f), size = Size(w * 0.15f, h * 0.14f))
-        drawCircle(color = c, radius = w * 0.075f, center = Offset(w * 0.5f, h * 0.5f))
-        drawLine(c, Offset(w * 0.5f, h * 0.72f), Offset(w * 0.5f, h * 0.9f), strokeWidth = 3f)
-        drawLine(c, Offset(w * 0.4f, h * 0.9f), Offset(w * 0.6f, h * 0.9f), strokeWidth = 3f)
-    }
-}
-
-/* ─── Channel card (shared room row) ────────────────────── */
+/* ─── Channel card (shared room row): M3 Expressive Card ─── */
 
 @Composable
 fun ChannelCard(
@@ -201,29 +210,39 @@ fun ChannelCard(
     onTap: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    // M3 Expressive Card: built-in press indication + accessible click role,
+    // TalkNet surface/border colors kept.
+    Card(
+        onClick = onTap,
+        modifier = modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(24.dp),
+        colors = CardDefaults.cardColors(containerColor = TalkCard),
+        border = androidx.compose.foundation.BorderStroke(1.dp, TalkBorder)
+    ) {
     Row(
-        modifier = modifier
+        modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(16.dp))
-            .background(TalkCard)
-            .border(1.dp, TalkBorder, RoundedCornerShape(16.dp))
-            .quietClickable(onClick = onTap)
             .padding(16.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         Box(
             modifier = Modifier
-                .size(40.dp)
-                .background(TalkCard2, RoundedCornerShape(12.dp))
-                .border(1.dp, TalkBorder, RoundedCornerShape(12.dp)),
+                .size(48.dp)
+                .background(TalkCard2, RoundedCornerShape(16.dp))
+                .border(1.dp, TalkBorder, RoundedCornerShape(16.dp)),
             contentAlignment = Alignment.Center
         ) {
-            RadioIcon(active = ch.live)
+            Icon(
+                imageVector = Icons.Filled.Wifi,
+                contentDescription = null,
+                tint = if (ch.live) TalkMint else TalkMuted,
+                modifier = Modifier.size(24.dp)
+            )
         }
         Spacer(Modifier.width(16.dp))
         Column(modifier = Modifier.weight(1f)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(ch.name, color = TalkText, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+                Text(ch.name, color = TalkText, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
                 if (ch.live) {
                     Spacer(Modifier.width(8.dp))
                     PulsingDot()
@@ -248,6 +267,7 @@ fun ChannelCard(
             if (ch.knownPeers.isNotEmpty()) AvatarStack(ch.knownPeers)
             if (ch.live) WaveformBars(active = true)
         }
+    }
     }
 }
 /* ─── Shared room list (pinned + recents + word) ────────── */
@@ -288,11 +308,10 @@ fun RoomListContent(
             ) {
                 MonoLabel("JOIN BY WORD")
                 Spacer(Modifier.height(8.dp))
-                OutlinedTextField(
+                TalkTextField(
                     value = freeWord,
                     onValueChange = onFreeWord,
-                    placeholder = { Text("e.g. night-shift", color = TalkMuted) },
-                    singleLine = true,
+                    placeholder = "e.g. night-shift",
                     modifier = Modifier.fillMaxWidth()
                 )
                 Spacer(Modifier.height(8.dp))
@@ -303,7 +322,7 @@ fun RoomListContent(
                     onClick = onJoinWord,
                     enabled = freeWord.isNotBlank(),
                     modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(12.dp)
+                    shape = RoundedCornerShape(24.dp)
                 )
             }
         }
@@ -380,11 +399,10 @@ fun SettingsPage(
             SettingsGroup("PROFILE") {
                 MonoLabel("DISPLAY NAME")
                 Spacer(Modifier.height(6.dp))
-                OutlinedTextField(
+                TalkTextField(
                     value = name,
                     onValueChange = onName,
-                    placeholder = { Text("e.g. Alex Torres", color = TalkMuted) },
-                    singleLine = true,
+                    placeholder = "e.g. Alex Torres",
                     modifier = Modifier.fillMaxWidth()
                 )
                 Spacer(Modifier.height(4.dp))
@@ -407,9 +425,16 @@ fun SettingsPage(
                     Switch(
                         checked = volPtt,
                         onCheckedChange = onVolPtt,
+                        thumbContent = if (volPtt) {
+                            { Icon(Icons.Filled.Check, contentDescription = null, Modifier.size(16.dp)) }
+                        } else null,
                         colors = SwitchDefaults.colors(
                             checkedTrackColor = TalkMint,
-                            checkedThumbColor = TalkBg
+                            checkedThumbColor = TalkBg,
+                            checkedIconColor = TalkMint,
+                            uncheckedTrackColor = TalkCard2,
+                            uncheckedThumbColor = TalkMuted,
+                            uncheckedBorderColor = TalkBorder
                         )
                     )
                 }
@@ -417,7 +442,7 @@ fun SettingsPage(
             SettingsGroup("QUICK TEXTS") {
                 MonoLabel("ONE PER LINE · MAX 8")
                 Spacer(Modifier.height(6.dp))
-                OutlinedTextField(
+                TalkTextField(
                     value = presetsText,
                     onValueChange = onPresetsText,
                     singleLine = false,
@@ -427,19 +452,17 @@ fun SettingsPage(
             SettingsGroup("CLOUD SERVER") {
                 MonoLabel("LIVEKIT URL")
                 Spacer(Modifier.height(6.dp))
-                OutlinedTextField(
+                TalkTextField(
                     value = url,
                     onValueChange = onUrl,
-                    singleLine = true,
                     modifier = Modifier.fillMaxWidth()
                 )
                 Spacer(Modifier.height(10.dp))
                 MonoLabel("TOKEN SERVER (WORKER)")
                 Spacer(Modifier.height(6.dp))
-                OutlinedTextField(
+                TalkTextField(
                     value = worker,
                     onValueChange = onWorker,
-                    singleLine = true,
                     modifier = Modifier.fillMaxWidth()
                 )
             }
@@ -528,11 +551,10 @@ fun DirectPage(
             Spacer(Modifier.height(4.dp))
             MonoLabel("DISPLAY NAME")
             Spacer(Modifier.height(8.dp))
-            OutlinedTextField(
+            TalkTextField(
                 value = lanName,
                 onValueChange = onLanName,
-                placeholder = { Text("e.g. Alex Carter", color = TalkMuted) },
-                singleLine = true,
+                placeholder = "e.g. Alex Carter",
                 modifier = Modifier.fillMaxWidth()
             )
             Spacer(Modifier.height(12.dp))
@@ -561,17 +583,21 @@ fun DirectPage(
                     nearby.forEach { peer ->
                         val label = peer.name.ifBlank { peer.ip }
                         val selected = peerIp == peer.ip
+                        Card(
+                            onClick = { onPeerIp(peer.ip) },
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(16.dp),
+                            colors = CardDefaults.cardColors(
+                                containerColor = if (selected) TalkMint.copy(alpha = 0.1f) else TalkCard
+                            ),
+                            border = androidx.compose.foundation.BorderStroke(
+                                1.dp,
+                                if (selected) TalkMint else TalkBorder
+                            )
+                        ) {
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .clip(RoundedCornerShape(16.dp))
-                                .background(if (selected) TalkMint.copy(alpha = 0.1f) else TalkCard)
-                                .border(
-                                    1.dp,
-                                    if (selected) TalkMint else TalkBorder,
-                                    RoundedCornerShape(16.dp)
-                                )
-                                .quietClickable { onPeerIp(peer.ip) }
                                 .padding(14.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
@@ -596,17 +622,17 @@ fun DirectPage(
                             }
                             if (selected) PulsingDot()
                         }
+                        }
                     }
                 }
             }
             Spacer(Modifier.height(14.dp))
             MonoLabel("PEER IP (MANUAL)")
             Spacer(Modifier.height(8.dp))
-            OutlinedTextField(
+            TalkTextField(
                 value = peerIp,
                 onValueChange = onPeerIp,
-                placeholder = { Text("e.g. 192.168.1.42", color = TalkMuted) },
-                singleLine = true,
+                placeholder = "e.g. 192.168.1.42",
                 modifier = Modifier.fillMaxWidth()
             )
             Spacer(Modifier.height(8.dp))
@@ -676,22 +702,20 @@ fun JoinScreen(
             Column {
                 MonoLabel("DISPLAY NAME")
                 Spacer(Modifier.height(8.dp))
-                OutlinedTextField(
+                TalkTextField(
                     value = name,
                     onValueChange = onName,
-                    placeholder = { Text("e.g. Alex Torres", color = TalkMuted) },
-                    singleLine = true,
+                    placeholder = "e.g. Alex Torres",
                     modifier = Modifier.fillMaxWidth()
                 )
             }
             Column {
                 MonoLabel("OR TYPE A NEW ROOM")
                 Spacer(Modifier.height(8.dp))
-                OutlinedTextField(
+                TalkTextField(
                     value = freeRoom,
                     onValueChange = onFreeRoom,
-                    placeholder = { Text("e.g. night-shift", color = TalkMuted) },
-                    singleLine = true,
+                    placeholder = "e.g. night-shift",
                     modifier = Modifier.fillMaxWidth()
                 )
                 if (freeRoom.isNotBlank()) {
@@ -705,37 +729,33 @@ fun JoinScreen(
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     channels.forEach { ch ->
                         val sel = selectedId == ch.id
+                        Card(
+                            onClick = { onSelect(ch.id) },
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(16.dp),
+                            colors = CardDefaults.cardColors(
+                                containerColor = if (sel) TalkMint.copy(alpha = 0.1f) else TalkCard
+                            ),
+                            border = androidx.compose.foundation.BorderStroke(
+                                1.dp,
+                                if (sel) TalkMint else TalkBorder
+                            )
+                        ) {
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .clip(RoundedCornerShape(16.dp))
-                                .background(if (sel) TalkMint.copy(alpha = 0.1f) else TalkCard)
-                                .border(
-                                    1.dp,
-                                    if (sel) TalkMint else TalkBorder,
-                                    RoundedCornerShape(16.dp)
-                                )
-                                .quietClickable { onSelect(ch.id) }
                                 .padding(14.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Box(
-                                modifier = Modifier
-                                    .size(20.dp)
-                                    .border(
-                                        2.dp,
-                                        if (sel) TalkMint else TalkMuted,
-                                        CircleShape
-                                    ),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                if (sel) Box(
-                                    Modifier
-                                        .size(10.dp)
-                                        .background(TalkMint, CircleShape)
+                            RadioButton(
+                                selected = sel,
+                                onClick = { onSelect(ch.id) },
+                                colors = RadioButtonDefaults.colors(
+                                    selectedColor = TalkMint,
+                                    unselectedColor = TalkMuted
                                 )
-                            }
-Spacer(Modifier.width(16.dp))
+                            )
+                            Spacer(Modifier.width(16.dp))
                             Column(modifier = Modifier.weight(1f)) {
                                 Text(
                                     ch.name,
@@ -749,6 +769,7 @@ Spacer(Modifier.width(16.dp))
                                 )
                             }
                             if (ch.knownPeers.isNotEmpty()) AvatarStack(ch.knownPeers, max = 2)
+                        }
                         }
                     }
                 }
@@ -767,7 +788,7 @@ Spacer(Modifier.width(16.dp))
                 onClick = onJoin,
                 enabled = canJoin,
                 modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(16.dp),
+                shape = RoundedCornerShape(28.dp),
                 fontSize = 16.sp
             )
         }
@@ -815,24 +836,7 @@ fun TalkSurface(
                 Text(identity, color = TalkText, fontSize = 16.sp, fontWeight = FontWeight.Bold)
                 MonoLabel(subtitle)
             }
-            Box(
-                contentAlignment = Alignment.Center,
-                modifier = Modifier
-                    .clip(RoundedCornerShape(8.dp))
-                    .background(TalkCard)
-                    .border(1.dp, TalkBorder, RoundedCornerShape(8.dp))
-                    .quietClickable { onChange() }
-                    .padding(horizontal = 12.dp, vertical = 8.dp)
-            ) {
-                Text(
-                    "CHANGE",
-                    color = TalkMint,
-                    fontSize = 11.sp,
-                    fontFamily = FontFamily.Monospace,
-                    letterSpacing = 1.sp,
-                    fontWeight = FontWeight.Bold
-                )
-            }
+            TalkChangeButton(onClick = onChange)
         }
         Box(
             Modifier
@@ -901,6 +905,17 @@ fun TalkSurface(
         ) {
             RoundPttButton(transmitting = transmitting, enabled = true, onDown = onDown, onUp = onUp)
         }
+        // M3 Expressive chat toggle: tonal toggle button morphing with the dock.
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.Center
+        ) {
+            com.example.lanptt.ui.talknet.TalkChatToggle(
+                expanded = sheetOpen,
+                onToggle = { sheetOpen = it },
+                unread = texts.size
+            )
+        }
         MonoLabel(
             transportLine,
             color = if (transmitting) TalkMint else TalkMuted,
@@ -960,11 +975,11 @@ private fun ChatDock(
             .border(1.dp, TalkBorder, RoundedCornerShape(16.dp))
             .animateContentSize()
     ) {
-        // Handle row — always visible, tap toggles.
+        // Handle row — always visible, tap toggles (M3 ripple + expand icon).
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .quietClickable { onToggle(!expanded) }
+                .clickable { onToggle(!expanded) }
                 .padding(horizontal = 14.dp, vertical = 10.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
@@ -983,17 +998,18 @@ private fun ChatDock(
                 }
             }
             if (unread > 0) {
-                Box(
-                    Modifier
-                        .size(20.dp)
-                        .background(TalkMint, CircleShape),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text("$unread", color = TalkBg, fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                }
+                androidx.compose.material3.Badge(
+                    containerColor = TalkMint,
+                    contentColor = TalkBg
+                ) { Text("$unread") }
             }
             Spacer(Modifier.width(6.dp))
-            Text(if (expanded) "▾" else "▴", color = TalkMuted, fontSize = 12.sp)
+            Icon(
+                imageVector = if (expanded) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore,
+                contentDescription = null,
+                tint = TalkMuted,
+                modifier = Modifier.size(20.dp)
+            )
         }
         if (expanded) {
             Box(
@@ -1068,21 +1084,19 @@ private fun ChatDock(
                         }
                     }
                 }
-                // "↓ N new": shown when scrolled up and messages arrive — tap to jump to latest.
+                // "N new" pill: shown when scrolled up and messages arrive — tap to jump to latest.
                 if (expanded && !atBottom && unread > 0) {
-                    Row(
+                    FilledTonalButton(
+                        onClick = { listState.requestScrollToItem(texts.lastIndex) },
                         modifier = Modifier
                             .align(Alignment.BottomCenter)
-                            .padding(bottom = 8.dp)
-                            .clip(RoundedCornerShape(50.dp))
-                            .background(TalkMint, RoundedCornerShape(50.dp))
-                            .quietClickable { listState.requestScrollToItem(texts.lastIndex) },
-                        horizontalArrangement = Arrangement.spacedBy(4.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text("↓", color = TalkBg, fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                        Text("$unread new", color = TalkBg, fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                    }
+                            .padding(bottom = 8.dp),
+                        shape = RoundedCornerShape(50.dp),
+                        colors = androidx.compose.material3.ButtonDefaults.filledTonalButtonColors(
+                            containerColor = TalkMint,
+                            contentColor = TalkBg
+                        )
+                    ) { Text("$unread new", fontWeight = FontWeight.Bold) }
                 }
             }
             Box(
@@ -1103,33 +1117,20 @@ private fun ChatDock(
                     verticalAlignment = Alignment.Bottom,
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    OutlinedTextField(
+                    TalkTextField(
                         value = draft,
                         onValueChange = { draft = it },
-                        placeholder = { Text("Message…", color = TalkMuted, fontSize = 13.sp) },
-                        singleLine = true,
-                        shape = RoundedCornerShape(12.dp),
+                        placeholder = "Message…",
                         modifier = Modifier.weight(1f)
                     )
                     val canSend = draft.isNotBlank()
-                    Box(
-                        contentAlignment = Alignment.Center,
-                        modifier = Modifier
-                            .size(48.dp)
-                            .clip(RoundedCornerShape(12.dp))
-                            .background(if (canSend) TalkMint else TalkCard2)
-                            .border(
-                                1.dp,
-                                if (canSend) TalkMint else TalkBorder,
-                                RoundedCornerShape(12.dp)
-                            )
-                            .quietClickable(enabled = canSend) {
-                                onSendText(draft.trim())
-                                draft = ""
-                            }
-                    ) {
-                        Text("▸", color = if (canSend) TalkBg else TalkMuted, fontSize = 18.sp, fontWeight = FontWeight.Bold)
-                    }
+                    TalkSendButton(
+                        enabled = canSend,
+                        onClick = {
+                            onSendText(draft.trim())
+                            draft = ""
+                        }
+                    )
                 }
                 if (presets.isNotEmpty()) {
                     Box(Modifier.height(8.dp))
@@ -1146,9 +1147,16 @@ private fun ChatDock(
                     Switch(
                         checked = liveMode,
                         onCheckedChange = onToggleLive,
+                        thumbContent = if (liveMode) {
+                            { Icon(Icons.Filled.Check, contentDescription = null, Modifier.size(16.dp)) }
+                        } else null,
                         colors = SwitchDefaults.colors(
                             checkedTrackColor = TalkMint,
-                            checkedThumbColor = TalkBg
+                            checkedThumbColor = TalkBg,
+                            checkedIconColor = TalkMint,
+                            uncheckedTrackColor = TalkCard2,
+                            uncheckedThumbColor = TalkMuted,
+                            uncheckedBorderColor = TalkBorder
                         )
                     )
                 }
